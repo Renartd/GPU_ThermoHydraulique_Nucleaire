@@ -1,0 +1,198 @@
+\documentclass{beamer}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[frenchb]{babel}
+\usepackage{eurosym}
+
+\usepackage{graphicx}
+
+
+\newcommand\host{{\it host}\,}
+\newcommand\device{{\it device}\,}
+
+
+% --------- BEGIN STYLE BEAMER ---------
+\usetheme{Madrid}
+\definecolor{ECNBleu}{HTML}{102648}
+\definecolor{ECNJaune}{HTML}{FAB600}
+
+\setbeamercolor{frametitle}{bg=ECNBleu,fg=white} %le titre de la frame, en haut
+\setbeamercolor{title in head/foot}{bg=ECNJaune,fg=ECNBleu} %barre bas, milieu
+\setbeamercolor{author in head/foot}{bg=ECNBleu,fg=ECNJaune} %barre bas, gauche
+\setbeamercolor{date in head/foot}{bg=ECNBleu,fg=ECNJaune} %barre bas, droit
+\setbeamercolor{section in head/foot}{bg=ECNJaune,fg=ECNBleu} %haut gauche
+\setbeamercolor{subsection in head/foot}{bg=ECNBleu,fg=ECNBleu} %haut droite
+\setbeamercolor{title}{bg=ECNBleu,fg=white}
+\setbeamercolor{block title}{fg=white,bg=ECNBleu}
+
+%\setbeamercolor{normal text}{bg=IUTBleuFonce} %texte
+\setbeamercolor{item}{bg=ECNBleu}
+\setbeamercolor{subitem}{bg=ECNJaune}
+\setbeamercolor{description item}{fg=couleurEmph}
+\setbeamercolor{section in toc}{fg=ECNBleu}
+%\setbeamercolor{subsubitem}{bg=IUTBleuFonce}
+
+%structure (eq emph dans beamer)
+\setbeamercolor{emph}{fg=couleurEmph}
+% ----------------------------
+
+\usepackage{listings}
+
+\lstdefinestyle{customc}{
+  belowcaptionskip=1\baselineskip,
+  breaklines=true,
+  frame=L,
+  xleftmargin=\parindent,
+  language=C,
+  showstringspaces=false,
+  basicstyle=\tiny\ttfamily,
+  keywordstyle=\bfseries\color{green!40!black},
+  commentstyle=\itshape\color{purple!40!black},
+  identifierstyle=\color{blue},
+  stringstyle=\color{orange},
+}
+
+\lstset{escapechar=@,style=customc}
+
+\newenvironment<>{questionblock}[1]{%
+\setbeamercolor{block title}{bg=ECNJaune,fg=ECNBleu}%
+\begin{block}#2{#1}}{\end{block}}
+
+\title[GPGPU]{Programmation sur Processeur Graphique}
+\subtitle[\ldots]{---\\Part 2b : Outils de développement}
+\author[P.-E. Hladik]{Pierre-Emmanuel Hladik\\\tiny pierre-emmanuel.hladik@ec-nantes.fr}
+\institute[Centrale Nantes]{}
+%{\tiny\date{\today}}
+%\logo{
+\titlegraphic{
+	\flushleft\includegraphics[width=3cm]{./LogoCN_RVB}
+}
+
+\begin{document}
+
+ \frame{\titlepage}
+ 
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}[plain]
+\frametitle{Debuggers : options de compilation}
+	
+	\begin{itemize}
+		\item Il y a deux compilateurs utilisés :
+		\begin{itemize}
+			\item compilateur de l'hôte (gcc, clang, etc.) : code C/C++ de l'host
+			\item NVCC : code du device
+		\end{itemize}
+		\medskip
+		\item NVCC prend en charge certaines options du compilateur hôte :
+		\begin{itemize}
+			\item Si l'option n'est pas pris en charge par nvcc, utilisez {\tt -Xcompiler} pour le transmettre au compilateur de l'hôte, par exemple {\tt -Xcompiler -fopenmp} pour utiliser la bibliothèque openMP.
+		\end{itemize}
+		\medskip
+		\item Options de débogage
+		\begin{itemize}
+			\item {\tt -g} : inclut les symboles de débogage de l'hôte
+			\item {\tt -G} : inclut les symboles de débogage du device
+			\item {\tt -lineinfo} : inclut les informations sur les lignes des symboles
+		\end{itemize}
+	\end{itemize}
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}[plain]
+\frametitle{Debuggers : CUDA-MEMCHECK}
+	
+	\url{http://docs.nvidia.com/cuda/cuda-memcheck}\vspace{1em}
+	
+		\begin{itemize}
+			\item Outil de debug pour la mémoire :
+			\begin{itemize}
+				\item Pas de recompilation nécessaire : {\tt cuda-memcheck ./exe}
+			\end{itemize}
+		\medskip
+			\item Permet de détecter :
+			\begin{itemize}
+				\item Fuites de mémoire
+				\item Erreurs de mémoire (OOM, accès mal aligné, instruction illégale, etc.)
+				\item Accès concurrent
+				\item Barrières mémoires illégales
+				\item Mémoire non initialisée
+			\end{itemize}
+		\medskip
+			\item Pour afficher les numéros de ligne, utilisez les options de compilation suivants : 
+			\begin{itemize}
+				\item Pas de recompilation nécessaire : {\tt -Xcompiler -rdynamic -lineinfo}
+			\end{itemize}
+	\end{itemize}
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}[plain]
+\frametitle{Debuggers : CUDA-GDB}
+	
+	\url{http://docs.nvidia.com/cuda/cuda-gdb}\vspace{1em}
+	
+	\begin{itemize}
+		\item - cuda-gdb est une extension de GDB :
+		\begin{itemize}
+			\item Permet un débogage du code CUDA et CPU
+		\end{itemize}
+		\medskip
+		\item Fonctionne sous Linux et Macintosh
+		\begin{itemize}
+			\item Pour un débogueur Windows, utilisez NVIDIA Nsight Eclipse Edition ou Visual Studio Edition.
+		\end{itemize}	
+	\end{itemize}
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}[plain]
+\frametitle{Logiciel de profilage : NVPROF}
+	
+	\url{https://docs.nvidia.com/cuda/profiler-users-guide/\#nvprof}\vspace{1em}
+	
+	\begin{itemize}
+		\item Logiciel de profilage en ligne de commande
+		\begin{itemize}
+			\item  Mesure le temps de calcul pour chaque kernel
+			\item  Mesure le temps de transfert de la mémoire
+			\item  Collecte les métriques et les événements
+			\item  Prend en charge la hiérarchie complète des processus
+			\item  Collecte les données pour NVIDIA Visual Profiler (NVVP)
+			\item  Pas besoin de compiler
+		\end{itemize}
+	\end{itemize}
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}[plain]
+\frametitle{NVIDIA’s Visual Profiler (NVVP)}
+	
+	\url{https://docs.nvidia.com/cuda/profiler-users-guide/\#visual-profiler}\vspace{1em}
+	
+	\begin{itemize}
+		\item NVIDIA Visual Profiler permet de :
+		\begin{itemize}
+			\item Visualiser et optimiser les performances
+			\item Afficher un chronogramme des activités d'une application sur le CPU et le GPU
+			\item Analyser l'application pour détecter les goulets d'étranglement potentiels			
+		\end{itemize}
+	\end{itemize}
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}[plain]
+\frametitle{Un peu de pratique avec le TD2 B}
+
+\begin{block}{Objectifs}
+\begin{itemize}
+	\item Utiliser cuda-memcheck
+	\item Analyse de performances
+	\item Utiliser cuda-gdb
+\end{itemize}
+\end{block}
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\end{document}

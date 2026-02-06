@@ -1,0 +1,306 @@
+\documentclass[9pt]{beamer}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[frenchb]{babel}
+\usepackage{eurosym}
+
+\usepackage{multirow}
+
+\usepackage{graphicx}
+
+\usepackage{ulem}
+
+
+\newcommand\host{{\it host} }
+\newcommand\device{{\it device} }
+
+
+% --------- BEGIN STYLE BEAMER ---------
+\usetheme{Madrid}
+\definecolor{ECNBleu}{HTML}{102648}
+\definecolor{ECNJaune}{HTML}{FAB600}
+
+\setbeamercolor{frametitle}{bg=ECNBleu,fg=white} %le titre de la frame, en haut
+\setbeamercolor{title in head/foot}{bg=ECNJaune,fg=ECNBleu} %barre bas, milieu
+\setbeamercolor{author in head/foot}{bg=ECNBleu,fg=ECNJaune} %barre bas, gauche
+\setbeamercolor{date in head/foot}{bg=ECNBleu,fg=ECNJaune} %barre bas, droit
+\setbeamercolor{section in head/foot}{bg=ECNJaune,fg=ECNBleu} %haut gauche
+\setbeamercolor{subsection in head/foot}{bg=ECNBleu,fg=ECNBleu} %haut droite
+\setbeamercolor{title}{bg=ECNBleu,fg=white}
+\setbeamercolor{block title}{fg=white,bg=ECNBleu}
+
+%\setbeamercolor{normal text}{bg=IUTBleuFonce} %texte
+\setbeamercolor{item}{bg=ECNBleu}
+\setbeamercolor{subitem}{bg=ECNJaune}
+\setbeamercolor{description item}{fg=couleurEmph}
+\setbeamercolor{section in toc}{fg=ECNBleu}
+%\setbeamercolor{subsubitem}{bg=IUTBleuFonce}
+
+%structure (eq emph dans beamer)
+\setbeamercolor{emph}{fg=couleurEmph}
+% ----------------------------
+
+\usepackage{listings}
+
+\lstdefinestyle{customc}{
+  belowcaptionskip=1\baselineskip,
+  breaklines=true,
+  frame=L,
+  xleftmargin=\parindent,
+  language=C,
+  showstringspaces=false,
+  basicstyle=\tiny\ttfamily,
+  keywordstyle=\bfseries\color{green!40!black},
+  commentstyle=\itshape\color{purple!40!black},
+  identifierstyle=\color{blue},
+  stringstyle=\color{orange},
+}
+
+\lstset{escapechar=@,style=customc}
+
+\newenvironment<>{questionblock}[1]{%
+\setbeamercolor{block title}{bg=ECNJaune,fg=ECNBleu}%
+\begin{block}#2{#1}}{\end{block}}
+
+\title[GPGPU]{Programmation sur Processeur Graphique}
+
+\subtitle[\ldots]{
+---\\Partie \sout{999} : (Tentative de) Synthèse}
+\author[P.-E. Hladik]{Pierre-Emmanuel Hladik\\\tiny pierre-emmanuel.hladik@ec-nantes.fr}
+\institute[Centrale Nantes]{}
+\date{\today}
+
+\begin{document}
+
+\frame{\titlepage}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}[plain]
+\frametitle{Pourquoi utiliser la programmation parallèle ?}
+
+\begin{itemize}
+	\item Réaliser un calcul en moins de temps,
+
+	\item Réaliser un calcul dans un laps de temps donné (cas de l'embarqué),
+
+	\item Produire un calcul \og plus précis \fg pour un problème donné dans un laps de temps donné
+	
+	\item ..
+\end{itemize}
+
+\begin{block}{Motivation commune : augmenter la vitesse}
+\begin{itemize}
+	\item Utiliser plus de ressources de calculs en même temps
+	\item Optimiser les performances de calcul = solliciter au maximum les unités de calcul sans temps creux
+\end{itemize}
+ \end{block}
+
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}[plain]
+\frametitle{... mais pas pour tous les problèmes}
+
+\begin{block}{Quel problème est un bon candidat ?}
+\begin{itemize}
+	\item Un problème avec beaucoup de données et beaucoup de calculs à chaque itération et/ou beaucoup d'itérations sur les données
+	\item Un problème qui puisse être décomposé en sous-problèmes parallèlisables (i.e. les calculs peuvent être réalisés en même temps)
+\end{itemize}
+
+ \end{block}
+
+
+
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}[plain]
+\frametitle{Le travail du développeur}
+
+\begin{block}{}
+Le développeur doit structurer le code et les données de manière à résoudre des sous-problèmes en parallèle.
+\end{block}
+
+\begin{block}{Plusieurs approches possibles}
+
+\begin{itemize}
+	\item {\color{red}La Bonne} : Accélérer le code initial
+	\begin{itemize}
+		 \item Utiliser les librairies existantes CuBLAS/CuFFT/thrust/Matlab/PGI pragmas/etc.
+	\end{itemize}
+	=> travail rapide pour les scientifiques du domaine (connaissances minimales requises)\medskip
+
+	\item {\color{orange}La Mieux} : réécrire/créer du nouveau code
+	\begin{itemize}
+		\item Permet de repenser l'algorithmique de manière efficace
+	\end{itemize}
+	=> travail efficace pour les informaticiens (connaissances minimales requises)\medskip
+
+	\item {\color{olive}La Meilleure} : Repenser les méthodes numériques et les algorithmes
+	\begin{itemize}
+		\item Potentiel avantage en termes de performances
+	\end{itemize}
+	=> travail interdisciplinaire : nécessite des connaissances en informatique et dans le domaine du problème
+
+\end{itemize}
+
+
+\end{block}
+
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%
+%\begin{frame}[plain]
+%\frametitle{4 étapes}
+%
+%décomposition du problème 
+%
+%choix de l'algorithme
+%
+%implémentation
+%
+%Optimisation des performances 
+%
+%\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}[plain]
+\frametitle{Comment faire ?}
+
+\begin{block}{Réfléchir, comprendre... puis programmer}
+\begin{itemize}
+	\item Analyser le problème que vous essayez de résoudre
+	\item Comprendre la structure du problème
+	\item Appliquer des techniques mathématiques pour trouver la solution	
+	\item Adapter le problème à une approche algorithmique (choix de l'algorithme)
+	\item Organiser la structure de calcul (décomposition du problème)
+	\begin{itemize}
+		\item Être conscient de l'interdépendance, des interactions, des goulets d'étranglement
+	\end{itemize}
+	\item Organiser les données
+	\begin{itemize}
+		\item Être  conscient de la localité et minimiser les données globales
+	\end{itemize}
+	\item Enfin, écrivez un code ! (c'est la partie facile... si on oublie le debogage)
+\end{itemize}
+\end{block}
+
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}[plain]
+\frametitle{Phases types d'un kernel}
+
+\begin{itemize}
+	\item Initialisation
+	\begin{itemize}
+		\item Instancier les structures de données et les peupler
+	\end{itemize}
+	\item Obtenir un identifiant unique pour chaque thread
+	\begin{itemize}
+		\item CUDA dispose d'un support intégré pour gérer les index
+		\item Calculer un identifiant unique pour chaque thread
+		\item Les identifiants sont utilisés pour différencier le comportement des threads et pour les accès mémoire
+	\end{itemize}
+	
+	\item Distribuer les données
+	\begin{itemize}
+		\item Décomposer les données globales en bloc/tuile et les associer à l'identififant,
+		\item Partager et/ou répliquer dans une structure partagée en utilisant l'ID de thread pour associer le sous-ensemble de données aux threads
+	\end{itemize}
+
+	\item Exécuter les calculs
+	\begin{itemize}
+		\item Utiliser les ID des threads pour distribuer les itérations de boucle
+		\begin{itemize}
+			\item Risque de divergence de la mémoire/des données
+		\end{itemize}
+
+		%\item Utiliser l'ID du thread pour réaliser les calculs spécifiques au thread
+		
+		\item Utiliser l'ID du thread pour faire des actions conditonnées :
+		\begin{itemize}
+			\item Risque de divergence d'instruction/d'exécution
+		\end{itemize}
+	\end{itemize}
+	\item Reconstruire la structure des données globale, préparer la prochaine itération (si besoin)
+\end{itemize}
+
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}[plain]
+\frametitle{Optimisation : focus warp et exécution}
+
+\begin{block}{Gestion des warps}
+	\begin{itemize}
+		\item Gestion de l'ordonnancement par des warps (groupes de 32 threads) par block :
+		\begin{itemize}
+			\item Avoir un multiple de 32 (nombre de threads par warp) dans chaque block
+			\item Avoir "suffisamment" warps  par bloc pour optimiser l'occupation du SM
+		\end{itemize}
+		\item Attention aux divergences dans un warp (tous les threads d'un warp exécutent la même instruction)
+	\end{itemize}
+\end{block}
+
+\begin{block}{Attention aux bouchons}
+	\begin{itemize}
+		\item Synchronisation des threads
+		\item Fonctions Atomiques
+	\end{itemize}
+\end{block}
+
+\begin{block}{La culture générale c'est important}
+
+Il existe déjà y a des algorithmes dédiés pour traiter certains problèmes, exemple : tuiles, réduction.
+
+\end{block}
+
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}[plain]
+\frametitle{Optimisation : focus sur la gestion de la mémoire}
+
+\begin{block}{Structure classique}
+	\begin{itemize}
+		\item allocation
+		\item copie CPU->GPU
+		\item {\it lancement kernel}
+		\item copie GPU->CPU
+		\item désallocation
+	\end{itemize}
+\end{block}
+
+\begin{block}{Optimisation gestion mémoire}
+	\begin{itemize}
+		\item Mémoire partagée : locale à un block, rapide d'accès, utile si réutilisation de la donnée, nécessite une recopie dans cette mémoire avant  le calcul, 
+		\item Attention aux accès fusionnés (coalesced)
+	\end{itemize}
+\end{block}
+
+
+\begin{block}{Type de gestion de la mémoire}
+\begin{itemize}
+	\item normale ({\tt malloc} (CPU), {\tt cudaMalloc} (GPU), {\tt cudaMemcpy} (CPU<->GPU)),
+	\item pinned ({\tt cudaHostAlloc} (CPU), {\tt cudaMalloc} (GPU), {\tt cudaMemcpy} (CPU<->GPU)),
+	\item unifiée ({\tt cudaMallocManaged} (CPU+GPU), {\tt cudaDeviceSynchronize} (CPU))
+\end{itemize}
+\end{block}
+
+\end{frame}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}[plain]
+\frametitle{N'oubliez pas votre trousse à outils}
+
+\begin{itemize}
+	\item Vérifier les retours d'erreur (cuda error)
+	\item Analyser les performances avec gprof et nvprof
+	\item {\color{gray} Debuggeur (gdb)}
+\end{itemize}
+
+	\begin{center}
+		\includegraphics[width=.5\textwidth]{./figures-pdf/boite_outils}
+	\end{center}
+
+\end{frame}
+
+
+
+\end{document}

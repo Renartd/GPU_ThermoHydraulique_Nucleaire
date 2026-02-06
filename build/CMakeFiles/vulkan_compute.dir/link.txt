@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/vulkan_compute.dir/src/main.cpp.o -o vulkan_compute  /usr/lib/x86_64-linux-gnu/libvulkan.so 

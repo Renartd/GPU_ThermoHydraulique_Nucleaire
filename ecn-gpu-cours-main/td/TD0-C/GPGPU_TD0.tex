@@ -1,0 +1,162 @@
+\input{../style}
+
+\title{{\Large Programmation sur Processeur Graphique -- GPGPU }\\
+\vspace{-0.4em}
+{\large TD 0 : un peu de C}\\
+{\small Centrale Nantes}\\
+\small P.-E. Hladik, \small{\texttt{pehladik@ec-nantes.fr}}\\
+---\\
+{\scriptsize  Version bêta (\today)}\\
+}
+
+\begin{document}
+
+\maketitle
+
+%\begin{table}[htdp]
+%\caption{Suivi des modifications}
+%\begin{center}
+%\begin{tabular}{|c|c|c|p{8cm}|}
+%\hline
+%Date & Version & Auteur & Modifications\\
+%\hline
+%JJ/MM/12 & 0.3.X & P.-E. Hladik&  \\
+%\hline
+%\end{tabular}
+%\end{center}
+%\label{default}
+%\end{table}%
+
+\begin{ad}[]{}
+ \begin{itemize}
+	Bien que vous puissiez directement travailler sur votre machine si vous avez un compilateur C, vous allez quand même travailler à distance sur la Jetson. L'objectif de ce TD est aussi de valider l'installation des outils qui seront utilisés par la suite. Pour pouvoir utiliser la jetson, allez voir le \href{https://gitlab.univ-nantes.fr/hladik-pe-1/ecn-gpu-cours/-/blob/main/HowTo/Hwt1-remote/GPGPU_Hwt_remote.pdf}{guide d'installation} sur hippocampus.
+\end{itemize}
+\end{ad}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%
+  \section{Addition vectorielle}
+%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{objectif}[]{Objectifs}
+\begin{itemize}
+\item Comprendre l'utilisation des structures de donn\'ees en C.
+\item Impl\'ementer une fonction d'addition de vecteurs.
+\item \'Ecrire et ex\'ecuter une fonction de test pour valider votre impl\'ementation.
+\end{itemize}
+\end{objectif}
+
+\begin{howto}[Conseils pour D\'ebutants]{}
+\begin{itemize}
+    \item Lisez attentivement l'exercice et notez les \'etapes à suivre.
+    \item Utilisez des commentaires dans votre code pour expliquer chaque partie. Cela vous aidera à organiser vos id\'ees.
+    \item N'h\'esitez pas à utiliser des instructions \texttt{printf} pour d\'eboguer votre code et v\'erifier les r\'esultats interm\'ediaires.
+    \item Testez votre code de mani\'ere incr\'ementale : \'ecrivez et testez chaque fonction avant de passer à la suivante.
+    \item En cas d'erreur, lisez attentivement les messages d'erreur, ils fournissent souvent des indices pour r\'esoudre le probl\'eme.
+    \item Consultez la documentation de la bibliothèque standard C pour les fonctions comme \texttt{malloc}, \texttt{free}, et d'autres.
+    \item Posez des questions ou discutez avec vos camarades en cas de blocage, mais essayez de comprendre la solution plut\^ot que de la copier.
+    \item Lib\'erez ({\tt free}) toute m\'emoire allou\'ee avec \texttt{malloc} pour \'eviter les fuites de m\'emoire.
+\end{itemize}
+\end{howto}
+
+\begin{ad}[]{Note Importante}
+Cet exercice est essentiel pour ma\^itriser les donn\'ees structur\'ees et les op\'erations de base en C. Bien que des outils comme ChatGPT puissent fournir des solutions très facilement, la v\'eritable valeur de cet exercice r\'eside dans l'impl\'ementation et le d\'ebogage du code {\bf par vous-m\^eme}. D\'efiez-vous vous même avant de demander de l'aide à une IA générative !
+\end{ad}
+
+\begin{wtodo}[Coder une addition vectorielle]{}
+
+\paragraph{T\^ache 0 : \'Ecrire la fonction principale}\,
+
+\begin{enumerate}
+    \item Cr\'eez un fichier C (par exemple, \texttt{main.c}).
+    \item \'Ecrivez le prototype de la fonction \texttt{main} comme suit :
+    \begin{verbatim}
+    int main() {
+        printf("Bonjour, mellon !\n");
+        return 0;
+    }
+    \end{verbatim}
+    \item Compilez le fichier et ex\'ecutez le programme à l'aide de la commande suivante (si vous n'avez pas de terminal dans VS Code, allez dans le menu Terminal et s\'electionnez Nouveau Terminal) :
+    \begin{verbatim}
+    gcc -o programme main.c && ./programme
+    \end{verbatim}
+    \item V\'erifiez que le programme affiche \texttt{Bonjour, mellon !} dans la console.
+\end{enumerate}
+
+\paragraph{T\^ache 1 : D\'efinir la structure du vecteur}\,
+
+\begin{enumerate}
+   \item Créez un fichier {\tt vector.h} dans lequel vous définissez la structure \texttt{t\_vector}
+    \item La structure \texttt{t\_vector} contient deux champs :
+    \begin{itemize}
+        \item Un pointeur vers un tableau contenant les \'el\'ements du vecteur (type \texttt{float}).
+        \item La taille du vecteur (type \texttt{int}).
+    \end{itemize}
+\end{enumerate}
+
+\paragraph{T\^ache 2 : Impl\'ementer la fonction d'addition}\,
+
+\begin{enumerate}
+    \item \'Ecrivez la fonction \texttt{t\_vector * addVec(t\_vector * a, t\_vector * b)} qui :
+    \begin{itemize}
+        \item V\'erifie si les dimensions de \texttt{a} et \texttt{b} sont identiques. Si ce n'est pas le cas, renvoie \texttt{NULL}.
+        \item Alloue de la m\'emoire pour un nouveau vecteur \texttt{res}.
+        \item Calcule l'addition \'el\'ement par \'el\'ement de \texttt{a} et \texttt{b}, en stockant le r\'esultat dans \texttt{res} (\texttt{res[i] = a[i] + b[i]}).
+        \item Renvoie le pointeur vers \texttt{res}.
+    \end{itemize}
+    \item Assurez-vous que votre fonction g\'ere les erreurs d'allocation de m\'emoire en renvoyant \texttt{NULL} si \texttt{malloc} \'echoue.
+\end{enumerate}
+
+\paragraph{T\^ache 3 : \'Ecrire une fonction de test}\,
+
+\begin{enumerate}
+    \item \'Ecrivez la fonction \texttt{int testAddVec()} qui :
+    \begin{itemize}
+        \item Cr\'ee deux vecteurs \texttt{a} et \texttt{b} avec des donn\'ees pr\'ed\'efinies :
+        \begin{itemize}
+            \item \texttt{a} contient \texttt{\{1.0, 2.0, 3.0\}}.
+            \item \texttt{b} contient \texttt{\{4.0, 5.0, 6.0\}}.
+        \end{itemize}
+        \item Appelle \texttt{addVec} pour calculer leur somme.
+        \item Compare le r\'esultat avec le vecteur attendu \texttt{\{5.0, 7.0, 9.0\}} à l'aide de la fonction \texttt{assert}.
+        \item Renvoie \texttt{1} si le test r\'eussit, sinon \texttt{0}.
+    \end{itemize}
+\end{enumerate}
+
+\paragraph{T\^ache 4 (optionnelle) : Tester des cas limites}\,
+
+\begin{itemize}
+    \item Vecteurs de tailles diff\'erentes (attendez-vous à \texttt{NULL}).
+    \item Vecteurs vides (taille 0).
+    \item Erreurs d'allocation m\'emoire (simulez avec des v\'erifications \texttt{NULL}).
+\end{itemize}
+%
+%Vous devez écrire en C la fonction {\tt t\_vector * addVec(t\_vector * a, t\_vector *b)} qui réalise l'addition des vecteurs {\tt a} et {\tt b} (les données des vecteurs sont de type {\tt float}). Le résultat est stocké un vector {\tt res} dont l'adresse est retournée par la fonction , i.e. {\tt res[i] = a[i] + b[i]}. Il faudra commencer par tester si les dimensions de {\tt a} et {\tt b} sont identique et retourner {\tt NULL} si ce n'est pas le cas.
+%
+%La structure {\tt t\_vector} est une structure avec deux champs : le premier est un pointeur vers la tableau contenants les éléments du vecteur (de type float), et le second est la taille du vecteur. C'est à vous de déclarer cette structure.
+%
+%Pour tester la fonction, écrivez une fonction de test {\tt int testAddVec()} qui réaliser l'addition des vecteurs {\tt (1, 2, 3)} et {\tt (4, 5, 6)} et qui compare le résultat calculé avec le vecteur {\tt (5, 7, 9)}. La fonction retourne 0 si la résultat est faux et 1 sinon.
+
+\end{wtodo}
+
+
+
+\begin{howto}[compiler et exécuter un code C]{}
+\noindent Depuis le terminal, utilisez la commande suivante pour compiler 
+\begin{verbatim}
+gcc -o addition_vecteur addition_vecteur.c
+\end{verbatim}
+et ex\'ecuter votre programme :
+\begin{verbatim}
+./addition_vecteur
+\end{verbatim}
+
+Vous pouvez enchaîner les deux commandes sur une seule ligne avec les séparant par {\tt \&\&} (la seconde commande est conditionnée par le succès de la première) :
+\begin{verbatim}
+gcc -o addition_vecteur addition_vecteur.c && ./addition_vecteur
+\end{verbatim}
+
+
+\end{howto} 
+
+
+\end{document}
