@@ -1,13 +1,25 @@
 cmake_minimum_required(VERSION 3.10)
-project(vulkan_compute_demo)
+project(viewer3d)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 14)
 
-find_package(Vulkan REQUIRED)
+find_package(Corrade REQUIRED Containers Utility)
+find_package(Magnum REQUIRED GL MeshTools Shaders Primitives Trade SceneGraph Sdl2Application)
 
-add_executable(vulkan_compute
-    src/main.cpp
+file(GLOB SOURCES "*.cpp")
+
+add_executable(viewer3d ${SOURCES})
+
+target_include_directories(viewer3d PRIVATE .)
+
+target_link_libraries(viewer3d PRIVATE
+    Corrade::Containers
+    Corrade::Utility
+    Magnum::GL
+    Magnum::MeshTools
+    Magnum::Shaders
+    Magnum::Primitives
+    Magnum::Trade
+    Magnum::SceneGraph
+    Magnum::Sdl2Application
 )
-
-target_include_directories(vulkan_compute PRIVATE ${Vulkan_INCLUDE_DIRS})
-target_link_libraries(vulkan_compute PRIVATE ${Vulkan_LIBRARIES})
