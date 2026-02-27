@@ -1,0 +1,14 @@
+# enrichissement=5
+# moderateur=1
+# puissance=32
+- - - - A A A - - - - 
+- - A A A A A A A - - 
+- A A A A A A A A A - 
+- A A A A A A A A A - 
+A A A A A A A A A A A 
+A A A A A A A A A A A 
+A A A A A A A A A A A 
+- A A A A A A A A A - 
+- A A A A A A A A A - 
+- - A A A A A A A - - 
+- - - - A A A - - - - 
