@@ -1,15 +1,13 @@
 // ============================================================
-//  main.cpp — Visualiseur Assemblages Nucléaires
-//  Rendu : raylib (OpenGL)
-//  Ombres : Vulkan RT (ray query) — touche V
-//  Dimensions : panneau cliquable — touche P
+//  main.cpp — Visualiseur + Simulation Thermique Nucléaire
 // ============================================================
-
 #include <raylib.h>
 #include <iostream>
 #include <fstream>
 #include <string>
 #include <cmath>
+#include <algorithm>
+#include <vector>
 
 #include "core/ReactorParams.hpp"
 #include "core/GridData.hpp"
@@ -20,38 +18,69 @@
 #include "render/ShadowRenderer.hpp"
 #include "render/HUD.hpp"
 #include "render/DimsPanel.hpp"
+#include "render/SimPanel.hpp"
+#include "render/HeatmapPanel.hpp"
 #include "physics/ThermalModel.hpp"
+#include "physics/NeutronFlux.hpp"
 #include "compute/VulkanContext.hpp"
 #include "compute/ShadowCompute.hpp"
+#include "compute/ThermalCompute.hpp"
 
 // ============================================================
 //  Overlay RT
 // ============================================================
-inline void drawRTOverlay(int sw, int sh,
-                           bool rtAvailable, bool rtEnabled,
+inline void drawRTOverlay(int sw, bool rtAvailable, bool rtEnabled,
                            const LightParams& lp, float lightAngle) {
     int x = 10, y = 170;
     DrawRectangle(x, y, 230, 90, {0,0,0,170});
     DrawRectangleLines(x, y, 230, 90, {80,80,80,255});
     DrawText("RAY TRACING (Vulkan)", x+8, y+8, 13, LIGHTGRAY);
-    if (!rtAvailable) {
-        DrawText("Non disponible", x+8, y+28, 12, {180,80,80,255});
-        return;
-    }
-    Color stateCol = rtEnabled ? Color{100,255,100,255} : Color{180,80,80,255};
-    DrawText(rtEnabled ? "ON  [V]" : "OFF [V]", x+8, y+28, 12, stateCol);
+    if (!rtAvailable) { DrawText("Non disponible", x+8, y+28, 12, {180,80,80,255}); return; }
+    Color sc = rtEnabled ? Color{100,255,100,255} : Color{180,80,80,255};
+    DrawText(rtEnabled ? "ON  [V]" : "OFF [V]", x+8, y+28, 12, sc);
     char buf[64];
-    snprintf(buf, sizeof(buf), "Samples : %d  [N/M]", lp.numSamples);
+    snprintf(buf,sizeof(buf),"Samples : %d  [N/M]", lp.numSamples);
     DrawText(buf, x+8, y+46, 12, LIGHTGRAY);
-    snprintf(buf, sizeof(buf), "Lumiere : %.0f deg  [J/K]", lightAngle);
+    snprintf(buf,sizeof(buf),"Lumiere : %.0f deg  [J/K]", lightAngle);
     DrawText(buf, x+8, y+64, 12, {255,220,100,255});
+}
+
+// ============================================================
+//  Overlay convergence
+// ============================================================
+inline void drawConvergenceOverlay(int sw, int sh,
+                                    const SimControl& ctrl,
+                                    float maxDeltaT,
+                                    float threshold,
+                                    bool converged) {
+    int x = 10, y = 270;
+    DrawRectangle(x, y, 230, 80, {0,0,0,170});
+    DrawRectangleLines(x, y, 230, 80, {80,80,80,255});
+    DrawText("SIMULATION", x+8, y+8, 13, LIGHTGRAY);
+
+    char buf[64];
+    snprintf(buf,sizeof(buf),"Temps : %.1f s", ctrl.simTime);
+    DrawText(buf, x+8, y+26, 12, LIGHTGRAY);
+
+    snprintf(buf,sizeof(buf),"dT max : %.4f C", maxDeltaT);
+    Color dtCol = (maxDeltaT < threshold*10) ? Color{100,255,100,255} : LIGHTGRAY;
+    DrawText(buf, x+8, y+42, 12, dtCol);
+
+    if (converged) {
+        DrawText("CONVERGE !", x+8, y+58, 13, {100,255,100,255});
+    } else {
+        const char* stateStr =
+            ctrl.state == SimState::RUNNING ? "En cours..." :
+            ctrl.state == SimState::PAUSED  ? "En pause"   : "Arrete";
+        Color sc = ctrl.state == SimState::RUNNING ? Color{255,200,50,255} : LIGHTGRAY;
+        DrawText(stateStr, x+8, y+58, 12, sc);
+    }
 }
 
 // ============================================================
 //  MAIN
 // ============================================================
 int main() {
-
     const std::string gridPath = "data/Assemblage.txt";
     const std::string csvPath  = "data/temperatures.csv";
 
@@ -70,61 +99,96 @@ int main() {
     GridData grid;
     grid.rows = (int)raw.size();
     grid.cols = grid.rows > 0 ? (int)raw[0].size() : 0;
-
     for (int r = 0; r < grid.rows; ++r)
         for (int c = 0; c < (int)raw[r].size(); ++c) {
-            if (!raw[r][c].isAssembly) continue;  // ← ignorer les vides '-'
+            if (!raw[r][c].isAssembly) continue;
             Cube cube;
             cube.sym         = raw[r][c].symbol;
-            cube.col         = symbolColor(cube.sym); // ← couleur par symbole
+            cube.col         = symbolColor(cube.sym);
             cube.temperature = params.tempEntree;
             cube.flux        = 0.0f;
             cube.row         = r;
             cube.col_idx     = c;
-            cube.pos         = {0,0,0}; // sera calculé par rebuildPositions
+            cube.pos         = {0,0,0};
             grid.cubes.push_back(cube);
         }
-
-    // Calcule les positions initiales selon les dims par défaut
     grid.rebuildPositions();
     std::cout << "[Main] " << grid.cubes.size() << " assemblages\n";
 
-    // --- Thermique ---
-    if (!ThermalModel::chargerCSV(csvPath, grid)) {
-        ThermalModel::simulerGaussien(grid, params);
-        ThermalModel::genererCSVExemple(csvPath, grid, params);
-    }
+    // --- Vulkan ---
+    VulkanContext    vkCtx;
+    ShadowCompute    shadowCompute;
+    ThermalCompute   thermalCompute;
+    LightParams      lightParams;
+    bool rtAvailable      = false;
+    bool thermalAvailable = false;
 
-    // --- Vulkan RT ---
-    VulkanContext vkCtx;
-    ShadowCompute shadowCompute;
-    LightParams   lightParams;
-    bool rtAvailable = false;
-
-    if (vkCtx.init() && shadowCompute.init(vkCtx, grid)) {
-        rtAvailable = true;
-        shadowCompute.compute(lightParams);
-        std::cout << "[Main] Vulkan RT OK\n";
-    } else {
-        std::cout << "[Main] RT non dispo\n";
+    if (vkCtx.init()) {
+        if (shadowCompute.init(vkCtx, grid)) {
+            rtAvailable = true;
+            shadowCompute.compute(lightParams);
+            std::cout << "[Main] Vulkan RT OK\n";
+        }
+        if (thermalCompute.init(vkCtx, grid, params.tempEntree)) {
+            thermalAvailable = true;
+            std::cout << "[Main] Vulkan Compute thermique OK\n";
+        }
     }
     bool rtEnabled = rtAvailable;
 
+    // --- Flux neutronique ---
+    NeutronFlux neutronFlux;
+    // Initialise le facteur d'échelle APRÈS avoir le dt du compute
+    if (thermalAvailable)
+        neutronFlux.init(thermalCompute.params.dt,
+                         thermalCompute.params.rho_cp, 2.0f);
+
+    // Buffer q_vol plat (indexé grille rows×cols)
+    std::vector<float> q_vol_flat(grid.rows * grid.cols, 0.0f);
+    bool fluxDirty = true; // recalcul nécessaire
+
+    auto recalcFlux = [&](FluxMode mode) {
+        neutronFlux.mode = mode;
+        std::vector<float> temps(grid.cubes.size());
+        for (int i=0; i<(int)grid.cubes.size(); ++i)
+            temps[i] = grid.cubes[i].temperature;
+        auto q_cubes = neutronFlux.calculer(grid, temps);
+        std::fill(q_vol_flat.begin(), q_vol_flat.end(), 0.0f);
+        for (int i=0; i<(int)grid.cubes.size(); ++i) {
+            int idx = grid.cubes[i].row * grid.cols + grid.cubes[i].col_idx;
+            if (idx < (int)q_vol_flat.size())
+                q_vol_flat[idx] = q_cubes[i];
+        }
+        fluxDirty = false;
+    };
+    recalcFlux(FluxMode::COSINUS_REP);
+
     // --- Raylib ---
-    const int SW = 1200, SH = 800;
-    InitWindow(SW, SH, "Visualiseur Assemblages Nucleaires");
+    const int SW = 1280, SH = 800;
+    InitWindow(SW, SH, "Visualiseur Thermique Nucleaire");
     SetTargetFPS(60);
 
     OrbitalCamera camera;
-    camera.distance = fmaxf(grid.cols, grid.rows) * (grid.dims.width + grid.dims.spacing) * 1.5f;
+    camera.distance = fmaxf(grid.cols, grid.rows)
+                    * (grid.dims.width + grid.dims.spacing) * 1.5f;
 
     RenderOptions renderOpt;
-    // Synchronise taille/hauteur du cube avec les dims physiques
-    renderOpt.cubeSize   = grid.dims.width;
-    renderOpt.cubeHeight = grid.dims.height * 0.1f; // échelle visuelle
+    renderOpt.cubeSize     = grid.dims.width;
+    renderOpt.cubeHeight   = grid.dims.height * 0.1f;
+    renderOpt.colormapMode = true;
 
-    DimsPanel dimsPanel;
+    DimsPanel    dimsPanel;
+    SimPanel     simPanel;
+    HeatmapPanel heatmapPanel;
+    SimControl   simCtrl;
+
     float lightAngle = 45.0f;
+    float maxDeltaT  = 999.0f;
+    float convergenceThreshold = 0.05f; // °C
+    bool  converged  = false;
+
+    // Températures précédentes pour calcul ΔT
+    std::vector<float> T_prev(grid.cubes.size(), params.tempEntree);
 
     // --- Boucle ---
     while (!WindowShouldClose()) {
@@ -132,39 +196,77 @@ int main() {
         camera.update();
         updateRenderOptions(renderOpt);
 
-        // Panneau dimensions : géré dans la section dessin
-
-        // RT toggle
-        if (IsKeyPressed(KEY_V) && rtAvailable) {
-            rtEnabled = !rtEnabled;
-            std::cout << "[RT] " << (rtEnabled ? "ON" : "OFF") << "\n";
-        }
-
-        // Recharger CSV
-        if (IsKeyPressed(KEY_R))
-            ThermalModel::chargerCSV(csvPath, grid);
-
-        // Lumière
-        bool lightMoved = IsKeyDown(KEY_J) || IsKeyDown(KEY_K);
+        // RT
+        if (IsKeyPressed(KEY_V) && rtAvailable) rtEnabled = !rtEnabled;
         if (IsKeyDown(KEY_J)) lightAngle -= 1.0f;
         if (IsKeyDown(KEY_K)) lightAngle += 1.0f;
-        if (lightMoved && rtAvailable) {
+        if ((IsKeyDown(KEY_J)||IsKeyDown(KEY_K)) && rtAvailable) {
             float rad = lightAngle * DEG2RAD;
             shadowCompute.setLightDir(cosf(rad), 0.3f, sinf(rad), lightParams);
             shadowCompute.compute(lightParams);
         }
         if (IsKeyPressed(KEY_N) && rtAvailable) {
-            lightParams.numSamples = (int)fmax(1,  lightParams.numSamples - 1);
+            lightParams.numSamples = (int)fmax(1, lightParams.numSamples-1);
             shadowCompute.compute(lightParams);
         }
         if (IsKeyPressed(KEY_M) && rtAvailable) {
-            lightParams.numSamples = (int)fmin(32, lightParams.numSamples + 1);
+            lightParams.numSamples = (int)fmin(32, lightParams.numSamples+1);
             shadowCompute.compute(lightParams);
+        }
+
+        // --- Simulation thermique ---
+        if (thermalAvailable && simCtrl.state == SimState::RUNNING && !converged) {
+
+            // Sauvegarde T avant le pas
+            for (int i=0; i<(int)grid.cubes.size(); ++i)
+                T_prev[i] = grid.cubes[i].temperature;
+
+            // Rétroaction Doppler (1 fois par frame, pas par step)
+            recalcFlux(simCtrl.fluxMode);
+
+            // Pas GPU
+            thermalCompute.step(simCtrl.stepsPerFrame, q_vol_flat);
+            thermalCompute.applyToGrid(grid);
+
+            // Calcul ΔT max pour convergence
+            maxDeltaT = 0.0f;
+            for (int i=0; i<(int)grid.cubes.size(); ++i)
+                maxDeltaT = fmaxf(maxDeltaT,
+                    fabsf(grid.cubes[i].temperature - T_prev[i]));
+
+            simCtrl.simTime += thermalCompute.params.dt * simCtrl.stepsPerFrame;
+            simCtrl.T_min = grid.tempMin;
+            simCtrl.T_max = grid.tempMax;
+
+            // Critère de convergence
+            if (maxDeltaT < convergenceThreshold) {
+                converged = true;
+                simCtrl.state = SimState::PAUSED;
+                std::cout << "[Sim] Convergence ! t=" << simCtrl.simTime
+                          << " s  T_max=" << grid.tempMax << " C\n";
+                std::cout << "[Sim] Temperatures finales :\n";
+                for (auto& c : grid.cubes)
+                    std::cout << "  [" << c.row << "," << c.col_idx
+                              << "] " << c.temperature << " C\n";
+            }
+        }
+
+        // Reset
+        if (simCtrl.state == SimState::STOPPED && thermalAvailable) {
+            thermalCompute.reset(params.tempEntree);
+            thermalCompute.applyToGrid(grid);
+            for (auto& c : grid.cubes) c.temperature = params.tempEntree;
+            simCtrl.simTime = 0.0f;
+            simCtrl.T_min   = params.tempEntree;
+            simCtrl.T_max   = params.tempEntree;
+            maxDeltaT       = 999.0f;
+            converged       = false;
+            recalcFlux(simCtrl.fluxMode);
         }
 
         // --- Rendu ---
         BeginDrawing();
-        ClearBackground({25, 25, 30, 255});
+        ClearBackground({25,25,30,255});
 
         BeginMode3D(camera.get());
             if (rtEnabled)
@@ -174,24 +276,43 @@ int main() {
                 drawGrid3D(grid, renderOpt);
         EndMode3D();
 
+        // UI
         drawHUD(SW, SH, params, grid, renderOpt);
-        drawRTOverlay(SW, SH, rtAvailable, rtEnabled, lightParams, lightAngle);
+        drawRTOverlay(SW, rtAvailable, rtEnabled, lightParams, lightAngle);
+        drawConvergenceOverlay(SW, SH, simCtrl, maxDeltaT,
+                               convergenceThreshold, converged);
+
         if (dimsPanel.update(grid.dims, SW)) {
             grid.rebuildPositions();
             renderOpt.cubeSize   = grid.dims.width;
             renderOpt.cubeHeight = grid.dims.height * 0.1f;
-            camera.distance = fmaxf(grid.cols, grid.rows)
-                            * (grid.dims.width + grid.dims.spacing) * 1.5f;
         }
 
-        // Aide touche P
-        DrawText("[P] Dimensions assemblage",
-                 SW - 210, SH - 40, 12, {100,100,100,255});
+        bool simChanged = simPanel.update(simCtrl, SW, SH);
+        if (simChanged) fluxDirty = true;
+        if (fluxDirty)  recalcFlux(simCtrl.fluxMode);
+
+        heatmapPanel.draw(grid, SW, SH);
+
+        // Notification convergence (centre écran)
+        if (converged) {
+            char buf[64];
+            snprintf(buf, sizeof(buf),
+                     "CONVERGE a t=%.0f s  T_max=%.1f C",
+                     simCtrl.simTime, simCtrl.T_max);
+            int tw = MeasureText(buf, 16);
+            DrawRectangle(SW/2-tw/2-10, SH/2-20, tw+20, 34, {0,0,0,200});
+            DrawText(buf, SW/2-tw/2, SH/2-12, 16, {100,255,100,255});
+        }
+
+        DrawText("[S]Sim [P]Dims [H]Heatmap [T]Colormap [V]RT",
+                 10, SH-20, 11, {80,80,80,255});
 
         EndDrawing();
     }
 
     shadowCompute.cleanup();
+    thermalCompute.cleanup();
     vkCtx.cleanup();
     CloseWindow();
     return 0;

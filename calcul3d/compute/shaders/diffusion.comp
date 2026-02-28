@@ -1,0 +1,87 @@
+#version 460
+// ============================================================
+//  diffusion.comp
+//  Diffusion thermique 2D par différences finies explicites
+//
+//  Équation résolue :
+//    T^(n+1) = T^n + Δt·α·∇²T/Δx² + Δt·q'''/(ρ·Cp)
+//
+//  Condition stabilité Fourier : α·Δt/Δx² ≤ 0.25
+// ============================================================
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Températures entrée/sortie (ping-pong)
+layout(set=0, binding=0) buffer TempIn  { float T_in[];  };
+layout(set=0, binding=1) buffer TempOut { float T_out[]; };
+
+// Puissance volumique q''' (W/m³) — calculée par NeutronFlux
+layout(set=0, binding=2) buffer QVol { float q_vol[]; };
+
+// Masque géométrie : 1=assemblage, 0=vide (caloporteur)
+layout(set=0, binding=3) buffer Mask { int mask[]; };
+
+// Paramètres simulation
+layout(set=0, binding=4) uniform SimParams {
+    float alpha;     // diffusivité thermique (m²/s) — UO₂ : 1.4e-6
+    float dx;        // pas spatial (m)
+    float dt;        // pas temporel (s)
+    float rho_cp;    // ρ·Cp (J/m³·K) — UO₂ : 2.578e6
+    float T_inlet;   // température caloporteur entrée (°C)
+    float T_max;     // température max sécurité (°C) — clamp
+    int   grid_cols; // colonnes grille plate
+    int   grid_rows; // lignes grille plate
+    int   total;     // total cellules (rows×cols)
+};
+
+// ============================================================
+//  Accesseur sûr : retourne T d'un voisin ou T_inlet si hors grille
+// ============================================================
+float getTemp(int x, int y) {
+    if (x < 0 || x >= grid_cols || y < 0 || y >= grid_rows)
+        return T_inlet;
+    int idx = y * grid_cols + x;
+    // Cellule vide → caloporteur à T_inlet
+    if (mask[idx] == 0) return T_inlet;
+    return T_in[idx];
+}
+
+// ============================================================
+//  Main
+// ============================================================
+void main() {
+    int x = int(gl_GlobalInvocationID.x);
+    int y = int(gl_GlobalInvocationID.y);
+
+    if (x >= grid_cols || y >= grid_rows) return;
+
+    int idx = y * grid_cols + x;
+
+    // Cellule vide → température fixe caloporteur
+    if (mask[idx] == 0) {
+        T_out[idx] = T_inlet;
+        return;
+    }
+
+    float T_c = T_in[idx];
+
+    // Voisins (différences finies 5 points)
+    float T_r = getTemp(x+1, y);
+    float T_l = getTemp(x-1, y);
+    float T_u = getTemp(x,   y-1);
+    float T_d = getTemp(x,   y+1);
+
+    // Laplacien discret ∇²T
+    float laplacian = (T_r + T_l + T_u + T_d - 4.0 * T_c) / (dx * dx);
+
+    // Terme source chaleur (fission)
+    float source = q_vol[idx] / rho_cp;
+
+    // Mise à jour explicite Euler
+    float T_new = T_c + dt * (alpha * laplacian + source);
+
+    // Clamp sécurité [T_inlet .. T_max]
+    T_new = clamp(T_new, T_inlet, T_max);
+
+    T_out[idx] = T_new;
+}

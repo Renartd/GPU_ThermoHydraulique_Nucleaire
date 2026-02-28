@@ -1,15 +1,19 @@
 #!/bin/bash
 echo "=== Build calcul3d ==="
 
-echo "[1/2] Compilation shader RT..."
-glslangValidator \
-    -V \
-    --target-env vulkan1.3 \
-    compute/shaders/shadow_rq.comp \
-    -o compute/shaders/shadow_rq.spv \
-    && echo "      shadow_rq.spv OK" \
-    || echo "      WARN : shader RT échoué — RT désactivé au runtime"
+# --- 1. Shaders GLSL → SPIR-V ---
+echo "[1/2] Compilation shaders..."
 
+compile_shader() {
+    glslangValidator -V --target-env vulkan1.3 "$1" -o "$2" \
+        && echo "      OK : $2" \
+        || echo "      WARN : echec $1"
+}
+
+compile_shader compute/shaders/shadow_rq.comp  compute/shaders/shadow_rq.spv
+compile_shader compute/shaders/diffusion.comp  compute/shaders/diffusion.spv
+
+# --- 2. C++ ---
 echo "[2/2] Compilation C++..."
 g++ main.cpp \
     core/AssemblageLoader.cpp \
