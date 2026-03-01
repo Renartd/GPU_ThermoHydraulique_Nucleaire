@@ -39,7 +39,7 @@ inline void drawRTOverlay(int sw, bool rtAvailable, bool rtEnabled,
     Color sc = rtEnabled ? Color{100,255,100,255} : Color{180,80,80,255};
     DrawText(rtEnabled ? "ON  [V]" : "OFF [V]", x+8, y+28, 12, sc);
     char buf[64];
-    snprintf(buf,sizeof(buf),"Samples : %d  [N/M]", lp.numSamples);
+    snprintf(buf,sizeof(buf),"Samples : %d  [N/B]", lp.numSamples); // N/B au lieu de N/M
     DrawText(buf, x+8, y+46, 12, LIGHTGRAY);
     snprintf(buf,sizeof(buf),"Lumiere : %.0f deg  [J/K]", lightAngle);
     DrawText(buf, x+8, y+64, 12, {255,220,100,255});
@@ -138,14 +138,12 @@ int main() {
 
     // --- Flux neutronique ---
     NeutronFlux neutronFlux;
-    // Initialise le facteur d'échelle APRÈS avoir le dt du compute
     if (thermalAvailable)
         neutronFlux.init(thermalCompute.params.dt,
                          thermalCompute.params.rho_cp, 2.0f);
 
-    // Buffer q_vol plat (indexé grille rows×cols)
     std::vector<float> q_vol_flat(grid.rows * grid.cols, 0.0f);
-    bool fluxDirty = true; // recalcul nécessaire
+    bool fluxDirty = true;
 
     auto recalcFlux = [&](FluxMode mode) {
         neutronFlux.mode = mode;
@@ -184,10 +182,10 @@ int main() {
 
     float lightAngle = 45.0f;
     float maxDeltaT  = 999.0f;
-    float convergenceThreshold = 0.05f; // °C
+    float convergenceThreshold = 0.05f;
     bool  converged  = false;
+    bool  needReset  = false;
 
-    // Températures précédentes pour calcul ΔT
     std::vector<float> T_prev(grid.cubes.size(), params.tempEntree);
 
     // --- Boucle ---
@@ -196,7 +194,7 @@ int main() {
         camera.update();
         updateRenderOptions(renderOpt);
 
-        // RT
+        // RT — samples déplacés sur N/B pour libérer M
         if (IsKeyPressed(KEY_V) && rtAvailable) rtEnabled = !rtEnabled;
         if (IsKeyDown(KEY_J)) lightAngle -= 1.0f;
         if (IsKeyDown(KEY_K)) lightAngle += 1.0f;
@@ -209,7 +207,7 @@ int main() {
             lightParams.numSamples = (int)fmax(1, lightParams.numSamples-1);
             shadowCompute.compute(lightParams);
         }
-        if (IsKeyPressed(KEY_M) && rtAvailable) {
+        if (IsKeyPressed(KEY_B) && rtAvailable) {  // B au lieu de M
             lightParams.numSamples = (int)fmin(32, lightParams.numSamples+1);
             shadowCompute.compute(lightParams);
         }
@@ -217,50 +215,58 @@ int main() {
         // --- Simulation thermique ---
         if (thermalAvailable && simCtrl.state == SimState::RUNNING && !converged) {
 
-            // Sauvegarde T avant le pas
-            for (int i=0; i<(int)grid.cubes.size(); ++i)
-                T_prev[i] = grid.cubes[i].temperature;
+            // Ralenti : sauter des frames si frameSkipMax > 0
+            bool doStep = true;
+            if (simCtrl.frameSkipMax > 0) {
+                simCtrl.frameSkip++;
+                doStep = (simCtrl.frameSkip > simCtrl.frameSkipMax);
+                if (doStep) simCtrl.frameSkip = 0;
+            }
 
-            // Rétroaction Doppler (1 fois par frame, pas par step)
-            recalcFlux(simCtrl.fluxMode);
+            if (doStep) {
+                for (int i=0; i<(int)grid.cubes.size(); ++i)
+                    T_prev[i] = grid.cubes[i].temperature;
 
-            // Pas GPU
-            thermalCompute.step(simCtrl.stepsPerFrame, q_vol_flat);
-            thermalCompute.applyToGrid(grid);
+                recalcFlux(simCtrl.fluxMode);
 
-            // Calcul ΔT max pour convergence
-            maxDeltaT = 0.0f;
-            for (int i=0; i<(int)grid.cubes.size(); ++i)
-                maxDeltaT = fmaxf(maxDeltaT,
-                    fabsf(grid.cubes[i].temperature - T_prev[i]));
+                thermalCompute.step(simCtrl.stepsPerFrame, q_vol_flat);
+                thermalCompute.applyToGrid(grid);
 
-            simCtrl.simTime += thermalCompute.params.dt * simCtrl.stepsPerFrame;
-            simCtrl.T_min = grid.tempMin;
-            simCtrl.T_max = grid.tempMax;
+                maxDeltaT = 0.0f;
+                for (int i=0; i<(int)grid.cubes.size(); ++i)
+                    maxDeltaT = fmaxf(maxDeltaT,
+                        fabsf(grid.cubes[i].temperature - T_prev[i]));
 
-            // Critère de convergence
-            if (maxDeltaT < convergenceThreshold) {
-                converged = true;
-                simCtrl.state = SimState::PAUSED;
-                std::cout << "[Sim] Convergence ! t=" << simCtrl.simTime
-                          << " s  T_max=" << grid.tempMax << " C\n";
-                std::cout << "[Sim] Temperatures finales :\n";
-                for (auto& c : grid.cubes)
-                    std::cout << "  [" << c.row << "," << c.col_idx
-                              << "] " << c.temperature << " C\n";
+                simCtrl.simTime += thermalCompute.params.dt * simCtrl.stepsPerFrame;
+                simCtrl.T_min = grid.tempMin;
+                simCtrl.T_max = grid.tempMax;
+
+                if (maxDeltaT < convergenceThreshold) {
+                    converged = true;
+                    simCtrl.state = SimState::PAUSED;
+                    std::cout << "[Sim] Convergence ! t=" << simCtrl.simTime
+                              << " s  T_max=" << grid.tempMax << " C\n";
+                    for (auto& c : grid.cubes)
+                        std::cout << "  [" << c.row << "," << c.col_idx
+                                  << "] " << c.temperature << " C\n";
+                }
             }
         }
 
-        // Reset
-        if (simCtrl.state == SimState::STOPPED && thermalAvailable) {
+        // Reset — one-shot via needReset
+        if (simCtrl.state == SimState::STOPPED && !needReset)
+            needReset = true;
+        if (needReset && simCtrl.state == SimState::STOPPED && thermalAvailable) {
+            needReset = false;
             thermalCompute.reset(params.tempEntree);
             thermalCompute.applyToGrid(grid);
             for (auto& c : grid.cubes) c.temperature = params.tempEntree;
-            simCtrl.simTime = 0.0f;
-            simCtrl.T_min   = params.tempEntree;
-            simCtrl.T_max   = params.tempEntree;
-            maxDeltaT       = 999.0f;
-            converged       = false;
+            simCtrl.simTime   = 0.0f;
+            simCtrl.T_min     = params.tempEntree;
+            simCtrl.T_max     = params.tempEntree;
+            maxDeltaT         = 999.0f;
+            converged         = false;
+            simCtrl.frameSkip = 0;
             recalcFlux(simCtrl.fluxMode);
         }
 
@@ -276,7 +282,6 @@ int main() {
                 drawGrid3D(grid, renderOpt);
         EndMode3D();
 
-        // UI
         drawHUD(SW, SH, params, grid, renderOpt);
         drawRTOverlay(SW, rtAvailable, rtEnabled, lightParams, lightAngle);
         drawConvergenceOverlay(SW, SH, simCtrl, maxDeltaT,
@@ -290,11 +295,10 @@ int main() {
 
         bool simChanged = simPanel.update(simCtrl, SW, SH);
         if (simChanged) fluxDirty = true;
-        if (fluxDirty)  recalcFlux(simCtrl.fluxMode);
+        if (fluxDirty) recalcFlux(simCtrl.fluxMode);
 
         heatmapPanel.draw(grid, SW, SH);
 
-        // Notification convergence (centre écran)
         if (converged) {
             char buf[64];
             snprintf(buf, sizeof(buf),
@@ -305,7 +309,7 @@ int main() {
             DrawText(buf, SW/2-tw/2, SH/2-12, 16, {100,255,100,255});
         }
 
-        DrawText("[S]Sim [P]Dims [H]Heatmap [T]Colormap [V]RT",
+        DrawText("[S]Sim [P/M]Vitesse [H]Heatmap [T]Colormap [V]RT",
                  10, SH-20, 11, {80,80,80,255});
 
         EndDrawing();
