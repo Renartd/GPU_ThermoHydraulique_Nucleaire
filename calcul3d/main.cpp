@@ -20,10 +20,11 @@
 #include "render/DimsPanel.hpp"
 #include "render/SimPanel.hpp"
 #include "render/HeatmapPanel.hpp"
-#include "render/CoolantPanel.hpp"          // ← AJOUT
+#include "render/CubeRenderer3D.hpp"   // gradient axial 3D
+#include "render/CoolantPanel.hpp"     // AJOUT
 #include "physics/ThermalModel.hpp"
 #include "physics/NeutronFlux.hpp"
-#include "physics/CoolantModel.hpp"         // ← AJOUT
+#include "physics/CoolantModel.hpp"    // AJOUT
 #include "compute/VulkanContext.hpp"
 #include "compute/ShadowCompute.hpp"
 #include "compute/ThermalCompute.hpp"
@@ -112,6 +113,9 @@ int main() {
     grid.rebuildPositions();
     std::cout << "[Main] " << grid.cubes.size() << " assemblages\n";
 
+    // IMPORTANT : simCtrl doit être déclaré AVANT thermalCompute.init()
+    SimControl simCtrl;
+
     VulkanContext  vkCtx;
     ShadowCompute  shadowCompute;
     ThermalCompute thermalCompute;
@@ -124,8 +128,9 @@ int main() {
             shadowCompute.compute(lightParams);
             std::cout << "[Main] Vulkan RT OK\n";
         }
-        if (thermalCompute.init(vkCtx, grid, params.tempEntree)) {
+        if (thermalCompute.init(vkCtx, grid, params.tempEntree, simCtrl.nSlices)) {
             thermalAvailable = true;
+            grid.nSlices = simCtrl.nSlices;
             std::cout << "[Main] Vulkan Compute thermique OK\n";
         }
     }
@@ -155,7 +160,7 @@ int main() {
     };
     recalcFlux(FluxMode::COSINUS_REP);
 
-    // --- Caloporteur ---                                     ← AJOUT
+    // --- Caloporteur ---
     CoolantModel  coolantModel;
     CoolantPanel  coolantPanel;
     CoolantParams coolantParams;
@@ -181,7 +186,6 @@ int main() {
     DimsPanel    dimsPanel;
     SimPanel     simPanel;
     HeatmapPanel heatmapPanel;
-    SimControl   simCtrl;
 
     float lightAngle = 45.0f;
     float maxDeltaT  = 999.0f;
@@ -213,7 +217,6 @@ int main() {
             lightParams.numSamples = (int)fmin(32, lightParams.numSamples+1);
             shadowCompute.compute(lightParams);
         }
-        // [F] cycle affichage fluide — actif en permanence
 
         // --- Simulation thermique ---
         if (thermalAvailable && simCtrl.state == SimState::RUNNING && !converged) {
@@ -233,7 +236,6 @@ int main() {
                 thermalCompute.step(simCtrl.stepsPerFrame, q_vol_flat);
                 thermalCompute.applyToGrid(grid);
 
-                // Mise à jour caloporteur après chaque pas thermique  ← AJOUT
                 if (coolantPanel.active)
                     coolantModel.update(grid);
 
@@ -258,7 +260,7 @@ int main() {
             }
         }
 
-        // Reset — one-shot
+        // Reset
         if (simCtrl.state == SimState::STOPPED && !needReset) needReset = true;
         if (needReset && simCtrl.state == SimState::STOPPED && thermalAvailable) {
             needReset = false;
@@ -268,7 +270,7 @@ int main() {
             simCtrl.simTime = 0.0f; simCtrl.T_min = params.tempEntree;
             simCtrl.T_max = params.tempEntree; maxDeltaT = 999.0f;
             converged = false; simCtrl.frameSkip = 0;
-            coolantModel.init(grid, coolantParams);           // ← AJOUT reset caloporteur
+            coolantModel.init(grid, coolantParams);
             recalcFlux(simCtrl.fluxMode);
         }
 
@@ -278,12 +280,11 @@ int main() {
 
         BeginMode3D(camera.get());
             if (rtEnabled)
-                drawGrid3DWithShadows(grid, renderOpt,
-                                      shadowCompute.shadowFactors, true);
+                drawGrid3DAxialWithShadows(grid, renderOpt,
+                                           shadowCompute.shadowFactors, true);
             else
-                drawGrid3D(grid, renderOpt);
+                drawGrid3DAxial(grid, renderOpt);
 
-            // Flèches caloporteur en 3D                      ← AJOUT
             coolantPanel.draw3DArrows(grid, coolantModel, renderOpt);
         EndMode3D();
 
@@ -298,16 +299,22 @@ int main() {
             renderOpt.cubeHeight = grid.dims.height * 0.1f;
         }
 
+        if (simCtrl.slicesChanged && thermalAvailable) {
+            simCtrl.slicesChanged = false;
+            thermalCompute.reinit(vkCtx, grid, params.tempEntree, simCtrl.nSlices);
+            grid.nSlices = simCtrl.nSlices;
+            thermalCompute.applyToGrid(grid);
+            converged = false; simCtrl.simTime = 0.0f; maxDeltaT = 999.0f;
+        }
+
         bool simChanged = simPanel.update(simCtrl, SW, SH);
         if (simChanged) fluxDirty = true;
         if (fluxDirty) recalcFlux(simCtrl.fluxMode);
 
-        // [F] switch mode affichage caloporteur — actif en permanence
         if (IsKeyPressed(KEY_F))
             coolantPanel.displayMode = (CoolantDisplayMode)(
                 ((int)coolantPanel.displayMode + 1) % 3);
 
-        // Panneau caloporteur                                 ← AJOUT
         if (coolantPanel.updatePanel(coolantParams, SW, SH)) {
             coolantModel.init(grid, coolantParams);
         }

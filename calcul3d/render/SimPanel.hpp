@@ -27,6 +27,10 @@ struct SimControl {
     int   stepsPerFrame = 1;
     int   frameSkip     = 0;
     int   frameSkipMax  = 0;
+
+    // Résolution 3D : tranches verticales par assemblage
+    int   nSlices       = 8;     // 4 / 8 / 16 / 32
+    bool  slicesChanged = false; // reinit ThermalCompute si true
 };
 
 struct SimPanel {
@@ -51,7 +55,7 @@ struct SimPanel {
         if (!visible) return false;
 
         const int PX = sw/2 - 180, PY = sh/2 - 170;
-        const int PW = 360,        PH = 340;
+        const int PW = 360,        PH = 430;   // ← augmenté de 340 à 430
 
         DrawRectangle(PX, PY, PW, PH, {10,10,25,240});
         DrawRectangleLines(PX, PY, PW, PH, {100,150,220,255});
@@ -91,34 +95,29 @@ struct SimPanel {
             ctrl.mode = SimMode::TEMPS_REEL;
         y += 28;
 
-        // --- Vitesse : champ de saisie ---
+        // --- Vitesse ---
         DrawText("Vitesse (0.125 - 1000) :", PX+10, y, 12, {180,180,180,255});
         y += 18;
 
-        // Champ de saisie
         Rectangle inputRect = {(float)(PX+15), (float)y, 120, 24};
         bool hoverInput = CheckCollisionPointRec(mouse, inputRect);
         if (clicked && hoverInput)  inputFocus = true;
         if (clicked && !hoverInput) inputFocus = false;
 
-        // Fond du champ
         DrawRectangleRec(inputRect, inputFocus ? Color{30,30,60,255} : Color{20,20,40,255});
         DrawRectangleLinesEx(inputRect, 1,
             inputFocus ? Color{100,180,255,255} : Color{80,80,120,255});
         DrawText(inputBuf, (int)inputRect.x+5, (int)inputRect.y+5, 13, WHITE);
 
-        // Curseur clignotant
         if (inputFocus && ((int)(GetTime()*2) % 2 == 0)) {
             int tw = MeasureText(inputBuf, 13);
             DrawRectangle((int)inputRect.x+5+tw, (int)inputRect.y+4, 2, 16, WHITE);
         }
 
-        // Saisie clavier
         if (inputFocus) {
             int key = GetCharPressed();
             while (key > 0) {
                 int len = (int)strlen(inputBuf);
-                // Accepte chiffres, point, virgule→point
                 if (key == ',' ) key = '.';
                 if ((key >= '0' && key <= '9') || key == '.') {
                     if (len < (int)sizeof(inputBuf)-1) {
@@ -128,19 +127,16 @@ struct SimPanel {
                 }
                 key = GetCharPressed();
             }
-            // Backspace
             if (IsKeyPressed(KEY_BACKSPACE)) {
                 int len = (int)strlen(inputBuf);
                 if (len > 0) inputBuf[len-1] = '\0';
             }
-            // Entrée ou Tab = valider
             if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_TAB)) {
                 applyInput(ctrl);
                 inputFocus = false;
             }
         }
 
-        // Boutons - / +
         Rectangle btnMinus = {(float)(PX+145), (float)y, 30, 24};
         Rectangle btnPlus  = {(float)(PX+180), (float)y, 30, 24};
         bool hoverM = CheckCollisionPointRec(mouse, btnMinus);
@@ -168,12 +164,10 @@ struct SimPanel {
             inputFocus = false;
         }
 
-        // Valeur courante affichée à droite
         char buf[64];
         snprintf(buf, sizeof(buf), "= x%.2f", ctrl.speedFactor);
         DrawText(buf, PX+220, y+4, 12, {255,220,80,255});
 
-        // Barre indicative
         y += 30;
         float barW = PW - 30.0f;
         float ratio = (log10f(ctrl.speedFactor) + 0.9f) / 3.9f;
@@ -183,7 +177,6 @@ struct SimPanel {
         DrawRectangleLines(PX+15, y, (int)barW, 6, {80,80,120,255});
         y += 14;
 
-        // Calcul stepsPerFrame / frameSkipMax
         if (ctrl.speedFactor >= 1.0f) {
             ctrl.stepsPerFrame = (int)fmaxf(1.0f, ctrl.speedFactor);
             ctrl.frameSkipMax  = 0;
@@ -205,6 +198,35 @@ struct SimPanel {
             snprintf(buf, sizeof(buf), "1 pas toutes les %d frames", ctrl.frameSkipMax+1);
         DrawText(buf, PX+18, y+38, 12, {120,120,180,255});
         y += 68;
+
+        // --- Résolution 3D ---
+        y += 6;
+        DrawRectangle(PX+10, y, PW-20, 58, {20,20,40,200});
+        DrawRectangleLines(PX+10, y, PW-20, 58, {60,60,90,255});
+        DrawText("Resolution 3D (tranches) :", PX+18, y+6, 12, LIGHTGRAY);
+        y += 22;
+
+        int sliceOpts[4] = {4, 8, 16, 32};
+        for (int i = 0; i < 4; ++i) {
+            Rectangle sb = {(float)(PX+10 + i*82), (float)y, 76, 24};
+            bool isActive = (ctrl.nSlices == sliceOpts[i]);
+            bool hover    = CheckCollisionPointRec(mouse, sb);
+            Color sc = isActive ? Color{40,120,200,255}
+                                : (hover ? Color{60,60,80,255} : Color{30,30,50,255});
+            DrawRectangleRec(sb, sc);
+            DrawRectangleLinesEx(sb, 1, isActive ? Color{80,180,255,255} : LIGHTGRAY);
+            char lbl[8]; snprintf(lbl, sizeof(lbl), "%d", sliceOpts[i]);
+            int tw = MeasureText(lbl, 13);
+            DrawText(lbl, (int)sb.x + (76-tw)/2, (int)sb.y+5, 13, WHITE);
+
+            if (clicked && hover && !isActive) {
+                ctrl.nSlices       = sliceOpts[i];
+                ctrl.slicesChanged = true;
+                ctrl.state         = SimState::STOPPED;
+                changed = true;
+            }
+        }
+        y += 30;
 
         // --- Boutons Start/Pause/Reset ---
         struct Btn { const char* label; Color col; Color hov; SimState tgt; } btns[3] = {
