@@ -213,6 +213,7 @@ int main() {
             lightParams.numSamples = (int)fmin(32, lightParams.numSamples+1);
             shadowCompute.compute(lightParams);
         }
+        // [F] cycle affichage fluide — actif en permanence
 
         // --- Simulation thermique ---
         if (thermalAvailable && simCtrl.state == SimState::RUNNING && !converged) {
@@ -300,6 +301,11 @@ int main() {
         bool simChanged = simPanel.update(simCtrl, SW, SH);
         if (simChanged) fluxDirty = true;
         if (fluxDirty) recalcFlux(simCtrl.fluxMode);
+
+        // [F] switch mode affichage caloporteur — actif en permanence
+        if (IsKeyPressed(KEY_F))
+            coolantPanel.displayMode = (CoolantDisplayMode)(
+                ((int)coolantPanel.displayMode + 1) % 3);
 
         // Panneau caloporteur                                 ← AJOUT
         if (coolantPanel.updatePanel(coolantParams, SW, SH)) {
