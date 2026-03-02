@@ -20,8 +20,10 @@
 #include "render/DimsPanel.hpp"
 #include "render/SimPanel.hpp"
 #include "render/HeatmapPanel.hpp"
+#include "render/CoolantPanel.hpp"          // ← AJOUT
 #include "physics/ThermalModel.hpp"
 #include "physics/NeutronFlux.hpp"
+#include "physics/CoolantModel.hpp"         // ← AJOUT
 #include "compute/VulkanContext.hpp"
 #include "compute/ShadowCompute.hpp"
 #include "compute/ThermalCompute.hpp"
@@ -39,7 +41,7 @@ inline void drawRTOverlay(int sw, bool rtAvailable, bool rtEnabled,
     Color sc = rtEnabled ? Color{100,255,100,255} : Color{180,80,80,255};
     DrawText(rtEnabled ? "ON  [V]" : "OFF [V]", x+8, y+28, 12, sc);
     char buf[64];
-    snprintf(buf,sizeof(buf),"Samples : %d  [N/B]", lp.numSamples); // N/B au lieu de N/M
+    snprintf(buf,sizeof(buf),"Samples : %d  [N/B]", lp.numSamples);
     DrawText(buf, x+8, y+46, 12, LIGHTGRAY);
     snprintf(buf,sizeof(buf),"Lumiere : %.0f deg  [J/K]", lightAngle);
     DrawText(buf, x+8, y+64, 12, {255,220,100,255});
@@ -57,15 +59,12 @@ inline void drawConvergenceOverlay(int sw, int sh,
     DrawRectangle(x, y, 230, 80, {0,0,0,170});
     DrawRectangleLines(x, y, 230, 80, {80,80,80,255});
     DrawText("SIMULATION", x+8, y+8, 13, LIGHTGRAY);
-
     char buf[64];
     snprintf(buf,sizeof(buf),"Temps : %.1f s", ctrl.simTime);
     DrawText(buf, x+8, y+26, 12, LIGHTGRAY);
-
     snprintf(buf,sizeof(buf),"dT max : %.4f C", maxDeltaT);
     Color dtCol = (maxDeltaT < threshold*10) ? Color{100,255,100,255} : LIGHTGRAY;
     DrawText(buf, x+8, y+42, 12, dtCol);
-
     if (converged) {
         DrawText("CONVERGE !", x+8, y+58, 13, {100,255,100,255});
     } else {
@@ -87,14 +86,12 @@ int main() {
     { std::ifstream t(gridPath); if (!t.is_open()) {
         std::cerr << "Fichier introuvable : " << gridPath << "\n"; return 1; } }
 
-    // --- Paramètres réacteur ---
     ReactorParams params = ReactorParams::lireDepuisFichier(gridPath);
     params.saisirConsole();
     std::cout << "Sauvegarder ? (o/n) : ";
     std::string rep; std::getline(std::cin, rep);
     if (rep == "o" || rep == "O") params.sauvegarder(gridPath);
 
-    // --- Chargement grille ---
     auto raw = AssemblageLoader::load(gridPath);
     GridData grid;
     grid.rows = (int)raw.size();
@@ -115,13 +112,11 @@ int main() {
     grid.rebuildPositions();
     std::cout << "[Main] " << grid.cubes.size() << " assemblages\n";
 
-    // --- Vulkan ---
-    VulkanContext    vkCtx;
-    ShadowCompute    shadowCompute;
-    ThermalCompute   thermalCompute;
-    LightParams      lightParams;
-    bool rtAvailable      = false;
-    bool thermalAvailable = false;
+    VulkanContext  vkCtx;
+    ShadowCompute  shadowCompute;
+    ThermalCompute thermalCompute;
+    LightParams    lightParams;
+    bool rtAvailable = false, thermalAvailable = false;
 
     if (vkCtx.init()) {
         if (shadowCompute.init(vkCtx, grid)) {
@@ -136,7 +131,6 @@ int main() {
     }
     bool rtEnabled = rtAvailable;
 
-    // --- Flux neutronique ---
     NeutronFlux neutronFlux;
     if (thermalAvailable)
         neutronFlux.init(thermalCompute.params.dt,
@@ -161,7 +155,16 @@ int main() {
     };
     recalcFlux(FluxMode::COSINUS_REP);
 
-    // --- Raylib ---
+    // --- Caloporteur ---                                     ← AJOUT
+    CoolantModel  coolantModel;
+    CoolantPanel  coolantPanel;
+    CoolantParams coolantParams;
+    coolantParams.T_inlet   = params.tempEntree;
+    coolantParams.H_coeur   = grid.dims.height;
+    coolantParams.D_h       = grid.dims.spacing * 0.8f;
+    coolantParams.A_canal   = coolantParams.D_h * coolantParams.D_h * 0.785f;
+    coolantModel.init(grid, coolantParams);
+
     const int SW = 1280, SH = 800;
     InitWindow(SW, SH, "Visualiseur Thermique Nucleaire");
     SetTargetFPS(60);
@@ -188,13 +191,12 @@ int main() {
 
     std::vector<float> T_prev(grid.cubes.size(), params.tempEntree);
 
-    // --- Boucle ---
     while (!WindowShouldClose()) {
 
         camera.update();
         updateRenderOptions(renderOpt);
 
-        // RT — samples déplacés sur N/B pour libérer M
+        // RT
         if (IsKeyPressed(KEY_V) && rtAvailable) rtEnabled = !rtEnabled;
         if (IsKeyDown(KEY_J)) lightAngle -= 1.0f;
         if (IsKeyDown(KEY_K)) lightAngle += 1.0f;
@@ -207,7 +209,7 @@ int main() {
             lightParams.numSamples = (int)fmax(1, lightParams.numSamples-1);
             shadowCompute.compute(lightParams);
         }
-        if (IsKeyPressed(KEY_B) && rtAvailable) {  // B au lieu de M
+        if (IsKeyPressed(KEY_B) && rtAvailable) {
             lightParams.numSamples = (int)fmin(32, lightParams.numSamples+1);
             shadowCompute.compute(lightParams);
         }
@@ -215,7 +217,6 @@ int main() {
         // --- Simulation thermique ---
         if (thermalAvailable && simCtrl.state == SimState::RUNNING && !converged) {
 
-            // Ralenti : sauter des frames si frameSkipMax > 0
             bool doStep = true;
             if (simCtrl.frameSkipMax > 0) {
                 simCtrl.frameSkip++;
@@ -228,9 +229,12 @@ int main() {
                     T_prev[i] = grid.cubes[i].temperature;
 
                 recalcFlux(simCtrl.fluxMode);
-
                 thermalCompute.step(simCtrl.stepsPerFrame, q_vol_flat);
                 thermalCompute.applyToGrid(grid);
+
+                // Mise à jour caloporteur après chaque pas thermique  ← AJOUT
+                if (coolantPanel.active)
+                    coolantModel.update(grid);
 
                 maxDeltaT = 0.0f;
                 for (int i=0; i<(int)grid.cubes.size(); ++i)
@@ -253,20 +257,17 @@ int main() {
             }
         }
 
-        // Reset — one-shot via needReset
-        if (simCtrl.state == SimState::STOPPED && !needReset)
-            needReset = true;
+        // Reset — one-shot
+        if (simCtrl.state == SimState::STOPPED && !needReset) needReset = true;
         if (needReset && simCtrl.state == SimState::STOPPED && thermalAvailable) {
             needReset = false;
             thermalCompute.reset(params.tempEntree);
             thermalCompute.applyToGrid(grid);
             for (auto& c : grid.cubes) c.temperature = params.tempEntree;
-            simCtrl.simTime   = 0.0f;
-            simCtrl.T_min     = params.tempEntree;
-            simCtrl.T_max     = params.tempEntree;
-            maxDeltaT         = 999.0f;
-            converged         = false;
-            simCtrl.frameSkip = 0;
+            simCtrl.simTime = 0.0f; simCtrl.T_min = params.tempEntree;
+            simCtrl.T_max = params.tempEntree; maxDeltaT = 999.0f;
+            converged = false; simCtrl.frameSkip = 0;
+            coolantModel.init(grid, coolantParams);           // ← AJOUT reset caloporteur
             recalcFlux(simCtrl.fluxMode);
         }
 
@@ -280,6 +281,9 @@ int main() {
                                       shadowCompute.shadowFactors, true);
             else
                 drawGrid3D(grid, renderOpt);
+
+            // Flèches caloporteur en 3D                      ← AJOUT
+            coolantPanel.draw3DArrows(grid, coolantModel, renderOpt);
         EndMode3D();
 
         drawHUD(SW, SH, params, grid, renderOpt);
@@ -297,6 +301,13 @@ int main() {
         if (simChanged) fluxDirty = true;
         if (fluxDirty) recalcFlux(simCtrl.fluxMode);
 
+        // Panneau caloporteur                                 ← AJOUT
+        if (coolantPanel.updatePanel(coolantParams, SW, SH)) {
+            coolantModel.init(grid, coolantParams);
+        }
+        coolantPanel.draw2DOverlay(grid, coolantModel, SW, SH);
+        coolantPanel.drawInfoOverlay(coolantModel, SW);
+
         heatmapPanel.draw(grid, SW, SH);
 
         if (converged) {
@@ -309,7 +320,7 @@ int main() {
             DrawText(buf, SW/2-tw/2, SH/2-12, 16, {100,255,100,255});
         }
 
-        DrawText("[S]Sim [P/M]Vitesse [H]Heatmap [T]Colormap [V]RT",
+        DrawText("[S]Sim [C]Caloporteur [F]AffichageFluide [H]Heatmap [T]Colormap [V]RT",
                  10, SH-20, 11, {80,80,80,255});
 
         EndDrawing();
