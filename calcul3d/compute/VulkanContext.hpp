@@ -277,13 +277,13 @@ private:
     void createDescriptorPool() {
         std::vector<VkDescriptorPoolSize> sizes = {
             {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 4},
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             16},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             64},  // ThermalCompute+NeutronCompute+marge
             {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,              4},
-            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,             8},
+            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,             16},
         };
         VkDescriptorPoolCreateInfo ci{};
         ci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        ci.maxSets       = 16;
+        ci.maxSets       = 32;
         ci.poolSizeCount = (uint32_t)sizes.size();
         ci.pPoolSizes    = sizes.data();
         VK_CHECK(vkCreateDescriptorPool(device, &ci, nullptr, &descPool));

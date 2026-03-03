@@ -15,6 +15,7 @@
 // ---- Rendu grille avec gradient axial (sans ombres) ----
 inline void drawGrid3DAxial(const GridData& grid,
                              const RenderOptions& ropt) {
+    if (ropt.showGrid) DrawGrid(40, 1.0f);
     float cubeH = ropt.cubeHeight;
     float cubeW = ropt.cubeSize;
     int   ns    = grid.nSlices > 0 ? grid.nSlices : 8;
@@ -66,6 +67,7 @@ inline void drawGrid3DAxialWithShadows(const GridData& grid,
                                         const RenderOptions& ropt,
                                         const std::vector<float>& shadowFactors,
                                         bool shadowEnabled) {
+    if (ropt.showGrid) DrawGrid(40, 1.0f);
     float cubeH  = ropt.cubeHeight;
     float cubeW  = ropt.cubeSize;
     int   ns     = grid.nSlices > 0 ? grid.nSlices : 8;

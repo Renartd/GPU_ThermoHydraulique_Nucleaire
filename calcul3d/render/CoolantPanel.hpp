@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstring>
 #include "../physics/CoolantModel.hpp"
+#include "SimPanel.hpp"  // pour SimControl + SimState
 
 enum class CoolantDisplayMode { FLECHES, OVERLAY, FLECHES_COULEUR };
 
@@ -34,12 +35,13 @@ struct CoolantPanel {
     }
 
     // ---- Panneau configuration ----
-    bool updatePanel(CoolantParams& params, int sw, int sh) {
+    bool updatePanel(CoolantParams& params, SimControl& simCtrl, int sw, int sh) {
         if (IsKeyPressed(KEY_C)) { visible = !visible; focusT = focusP = false; }
         if (!visible) return false;
 
-        const int PX = sw/2 - 200, PY = sh/2 - 230;
-        const int PW = 400,        PH = 450;
+        // Panneau bas-gauche, sous le bloc SIMULATION
+        const int PX = 10, PY = sh - 470;
+        const int PW = 400, PH = 450;
 
         DrawRectangle(PX, PY, PW, PH, {10,15,25,245});
         DrawRectangleLines(PX, PY, PW, PH, {80,180,220,255});
@@ -168,25 +170,49 @@ struct CoolantPanel {
         y += 32;
 
         // ---- Boutons ----
-        // Activer/désactiver
-        Rectangle btnToggle={(float)(PX+10),(float)y,130,26};
-        bool hT=CheckCollisionPointRec(mouse,btnToggle);
-        DrawRectangleRec(btnToggle, active?(hT?Color{40,100,40,255}:Color{30,80,30,255})
-                                         :(hT?Color{100,40,40,255}:Color{80,30,30,255}));
-        DrawRectangleLinesEx(btnToggle,1,LIGHTGRAY);
-        DrawText(active?"  ACTIF":"  INACTIF",PX+16,y+6,12,WHITE);
-        if(clicked&&hT){active=!active;changed=true;}
+        // Ligne 1 : Activer/Desactiver | Appliquer
+        Rectangle btnToggle = {(float)(PX+8),   (float)y, 120, 26};
+        Rectangle btnApply  = {(float)(PX+136),  (float)y, 120, 26};
+        bool hT = CheckCollisionPointRec(mouse, btnToggle);
+        bool hA = CheckCollisionPointRec(mouse, btnApply);
+        DrawRectangleRec(btnToggle, active ? (hT?Color{40,100,40,255}:Color{30,80,30,255})
+                                           : (hT?Color{100,40,40,255}:Color{80,30,30,255}));
+        DrawRectangleLinesEx(btnToggle, 1, LIGHTGRAY);
+        DrawText(active ? "  ACTIF" : "  INACTIF", PX+14, y+6, 12, WHITE);
+        if (clicked && hT) { active = !active; changed = true; }
 
-        // Appliquer
-        Rectangle btnApply={(float)(PX+150),(float)y,130,26};
-        bool hA=CheckCollisionPointRec(mouse,btnApply);
-        DrawRectangleRec(btnApply,hA?Color{40,80,140,255}:Color{30,60,120,255});
-        DrawRectangleLinesEx(btnApply,1,LIGHTGRAY);
-        DrawText("  Appliquer",PX+156,y+6,12,WHITE);
-        if(clicked&&hA) changed=true;
+        DrawRectangleRec(btnApply, hA ? Color{40,80,140,255} : Color{30,60,120,255});
+        DrawRectangleLinesEx(btnApply, 1, LIGHTGRAY);
+        DrawText("  Appliquer", PX+142, y+6, 12, WHITE);
+        if (clicked && hA) changed = true;
+        y += 34;
 
-        Rectangle pr={(float)PX,(float)PY,(float)PW,(float)PH};
-        if(clicked&&!CheckCollisionPointRec(mouse,pr)) visible=false;
+        // Ligne 2 : Appliquer + Start (bouton principal)
+        Rectangle btnStart = {(float)(PX+8), (float)y, PW-16, 28};
+        bool hS = CheckCollisionPointRec(mouse, btnStart);
+        DrawRectangleRec(btnStart, hS ? Color{30,160,60,255} : Color{20,110,40,255});
+        DrawRectangleLinesEx(btnStart, 2, {100,255,120,255});
+        // Texte centré
+        const char* startLbl = simCtrl.state == SimState::RUNNING
+            ? "  >> Simulation EN COURS — Pause"
+            : "  >> Appliquer + Lancer la simulation";
+        int stw = MeasureText(startLbl, 13);
+        DrawText(startLbl, PX + (PW-stw)/2, y+7, 13,
+                 simCtrl.state == SimState::RUNNING ? Color{255,220,80,255} : Color{180,255,180,255});
+        if (clicked && hS) {
+            changed = true;
+            active  = true;  // active le caloporteur automatiquement
+            if (simCtrl.state == SimState::RUNNING) {
+                simCtrl.state = SimState::PAUSED;
+            } else {
+                simCtrl.state   = SimState::RUNNING;
+                simCtrl.simTime = 0.0f;
+                visible = false;  // ferme le panneau
+            }
+        }
+
+        Rectangle pr = {(float)PX,(float)PY,(float)PW,(float)(PH+34)};
+        if (clicked && !CheckCollisionPointRec(mouse, pr)) visible = false;
 
         return changed;
     }
@@ -345,9 +371,8 @@ struct CoolantPanel {
         int cellPx = 28;
         int panelW = grid.cols * cellPx + 2;
         int panelH = grid.rows * cellPx + 30;
-        // Heatmap thermique occupe le coin bas-droit (cellPx=32 par défaut)
-        int heatW  = grid.cols * 32 + 12;
-        int panelX = sw - heatW - panelW - 12;
+        // Position : bas-gauche fixe (sous le bloc convergence)
+        int panelX = 10;
         int panelY = sh - panelH - 10;
 
         DrawRectangle(panelX, panelY, panelW, panelH, {5,10,20,220});
