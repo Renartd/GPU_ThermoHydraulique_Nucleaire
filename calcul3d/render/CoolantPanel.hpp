@@ -14,7 +14,7 @@ enum class CoolantDisplayMode { FLECHES, OVERLAY, FLECHES_COULEUR };
 
 struct CoolantPanel {
     bool    visible      = false;
-    bool    active       = true;
+    bool    active       = false;  // OFF par défaut, activer avec [C]→Actif
     CoolantDisplayMode displayMode = CoolantDisplayMode::FLECHES_COULEUR;
 
     char    bufT[16]  = "286";
@@ -202,10 +202,12 @@ struct CoolantPanel {
         arrowAnim += GetFrameTime() * 1.2f;
         if (arrowAnim > 1.0f) arrowAnim -= 1.0f;
 
-        float step   = grid.dims.width + grid.dims.spacing;
-        float cubeH  = ropt.cubeHeight;
-        float gap    = grid.dims.spacing;           // largeur interstice
-        float halfW  = grid.dims.width * 0.5f;
+        float step      = grid.dims.width + grid.dims.spacing;
+        float cubeH     = ropt.cubeHeight;
+        float arrowTopY = cubeH * 0.5f * 1.1f;   // 1.1x demi-hauteur visuelle
+        float arrowBotY = -cubeH * 0.5f;
+        float gap       = grid.dims.spacing;
+        float halfW     = grid.dims.width * 0.5f;
 
         // Vitesse max pour normalisation
         float v_max = 0.001f;
@@ -234,11 +236,18 @@ struct CoolantPanel {
                 float x_inter = hasL ? (posX_L + halfW + gap*0.5f)
                                      : (posX_R - halfW - gap*0.5f);
 
-                // Couleur : bleu froid → cyan chaud selon vitesse
+                // Couleur selon température du fluide (bleu froid → rouge chaud)
+                float T_f1 = model.getTfluid(r, c);
+                float T_f2 = model.getTfluid(r, c+1);
+                float T_fn = (T_f1 + T_f2) * 0.5f;
+                float Tf_rng = fmaxf(model.params.T_inlet + 1.0f, model.params.T_inlet + 60.0f);
+                float t_col = fmaxf(0.f, fminf(1.f,
+                    (T_fn - model.params.T_inlet) / (Tf_rng - model.params.T_inlet)));
+                // jet colormap : bleu(froid) → vert → rouge(chaud)
                 Color col = {
-                    (unsigned char)(10),
-                    (unsigned char)(80 + (int)(170*v_norm)),
-                    (unsigned char)(180 + (int)(75*v_norm)),
+                    (unsigned char)(fminf(255.f, t_col > 0.5f ? (t_col-0.5f)*2*255 : 0)),
+                    (unsigned char)(fminf(255.f, t_col < 0.5f ? t_col*2*255 : (1-t_col)*2*255)),
+                    (unsigned char)(fminf(255.f, t_col < 0.5f ? 200+(int)((0.5f-t_col)*110) : 0)),
                     220
                 };
 
@@ -247,19 +256,20 @@ struct CoolantPanel {
                 for (int nl = 0; nl < nLines; ++nl) {
                     float xOff = (nl - nLines*0.5f) * gap * 0.15f;
 
-                    // 4 segments animés qui montent
+                    // segments animés montant de arrowBotY à arrowTopY
+                    float rangeY = arrowTopY - arrowBotY;
+                    float segLen = rangeY * 0.22f;
                     for (int seg = 0; seg < 4; ++seg) {
                         float phase = fmodf(arrowAnim + seg * 0.25f, 1.0f);
-                        float yBot  = -cubeH*0.5f + phase * cubeH * 1.1f;
-                        float yTop  = yBot + cubeH * 0.18f;
+                        float yBot  = arrowBotY + phase * rangeY;
+                        float yTop  = fminf(yBot + segLen, arrowTopY);
 
                         Vector3 bot = {x_inter+xOff, yBot, posZ};
                         Vector3 top = {x_inter+xOff, yTop, posZ};
                         DrawLine3D(bot, top, col);
 
-                        // Pointe de flèche (seulement sur la ligne centrale)
-                        if (nl == nLines/2) {
-                            float s = gap * 0.3f * (0.5f + v_norm*0.5f);
+                        if (nl == nLines/2 && yTop >= arrowTopY - segLen*0.3f) {
+                            float s = gap * 0.4f * (0.5f + v_norm*0.5f);
                             DrawLine3D(top, {x_inter+xOff-s, yTop-s*0.8f, posZ}, col);
                             DrawLine3D(top, {x_inter+xOff+s, yTop-s*0.8f, posZ}, col);
                         }
@@ -287,24 +297,32 @@ struct CoolantPanel {
                 float z_inter = hasT ? (posZ_T + halfW + gap*0.5f)
                                      : (posZ_B - halfW - gap*0.5f);
 
+                float T_fh1 = model.getTfluid(r, c);
+                float T_fh2 = model.getTfluid(r+1, c);
+                float T_fhn = (T_fh1 + T_fh2) * 0.5f;
+                float Tfh_rng = fmaxf(model.params.T_inlet + 1.0f, model.params.T_inlet + 60.0f);
+                float t_colh = fmaxf(0.f, fminf(1.f,
+                    (T_fhn - model.params.T_inlet) / (Tfh_rng - model.params.T_inlet)));
                 Color col = {
-                    (unsigned char)(10),
-                    (unsigned char)(80+(int)(170*v_norm)),
-                    (unsigned char)(180+(int)(75*v_norm)),
+                    (unsigned char)(fminf(255.f, t_colh > 0.5f ? (t_colh-0.5f)*2*255 : 0)),
+                    (unsigned char)(fminf(255.f, t_colh < 0.5f ? t_colh*2*255 : (1-t_colh)*2*255)),
+                    (unsigned char)(fminf(255.f, t_colh < 0.5f ? 200+(int)((0.5f-t_colh)*110) : 0)),
                     180
                 };
 
                 int nLines = 1 + (int)(v_norm * 2);
+                float rangeY2 = arrowTopY - arrowBotY;
+                float segLen2 = rangeY2 * 0.22f;
                 for (int nl = 0; nl < nLines; ++nl) {
                     float zOff = (nl - nLines*0.5f) * gap * 0.15f;
                     for (int seg = 0; seg < 4; ++seg) {
                         float phase = fmodf(arrowAnim + seg*0.25f, 1.0f);
-                        float yBot  = -cubeH*0.5f + phase*cubeH*1.1f;
-                        float yTop  = yBot + cubeH*0.18f;
+                        float yBot  = arrowBotY + phase * rangeY2;
+                        float yTop  = fminf(yBot + segLen2, arrowTopY);
                         DrawLine3D({posX, yBot, z_inter+zOff},
                                    {posX, yTop, z_inter+zOff}, col);
-                        if (nl == nLines/2) {
-                            float s = gap*0.3f*(0.5f+v_norm*0.5f);
+                        if (nl == nLines/2 && yTop >= arrowTopY - segLen2*0.3f) {
+                            float s = gap*0.4f*(0.5f+v_norm*0.5f);
                             DrawLine3D({posX,yTop,z_inter+zOff},
                                        {posX,yTop-s*0.8f,z_inter+zOff-s},col);
                             DrawLine3D({posX,yTop,z_inter+zOff},
@@ -327,7 +345,9 @@ struct CoolantPanel {
         int cellPx = 28;
         int panelW = grid.cols * cellPx + 2;
         int panelH = grid.rows * cellPx + 30;
-        int panelX = 10;
+        // Heatmap thermique occupe le coin bas-droit (cellPx=32 par défaut)
+        int heatW  = grid.cols * 32 + 12;
+        int panelX = sw - heatW - panelW - 12;
         int panelY = sh - panelH - 10;
 
         DrawRectangle(panelX, panelY, panelW, panelH, {5,10,20,220});
@@ -347,9 +367,13 @@ struct CoolantPanel {
                 int px=panelX+c*cellPx, py=mapY+r*cellPx;
                 float T_f=model.getTfluid(r,c);
                 float norm=(Tf_max>Tf_min)?(T_f-Tf_min)/(Tf_max-Tf_min):0.f;
-                Color col={(unsigned char)(norm*80),
-                           (unsigned char)(100+norm*155),
-                           (unsigned char)(200+norm*55),200};
+                // jet colormap sur T_fluide
+                Color col = {
+                    (unsigned char)(fminf(255.f, norm > 0.5f ? (norm-0.5f)*2*255 : 0)),
+                    (unsigned char)(fminf(255.f, norm < 0.5f ? norm*2*255 : (1-norm)*2*255)),
+                    (unsigned char)(fminf(255.f, norm < 0.5f ? 200+(int)((0.5f-norm)*110) : 0)),
+                    200
+                };
                 DrawRectangle(px,py,cellPx,cellPx,col);
                 DrawRectangleLines(px,py,cellPx,cellPx,{0,0,0,60});
                 char vbuf[8];
