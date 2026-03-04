@@ -10,7 +10,7 @@
 #include <algorithm>
 #include "../core/GridData.hpp"
 
-enum class FluxMode { COSINUS_REP, UNIFORME };
+enum class FluxMode { DIFFUSION_2G, COSINUS_REP, UNIFORME };
 
 class NeutronFlux {
 public:

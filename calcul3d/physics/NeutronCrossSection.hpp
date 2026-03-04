@@ -55,15 +55,15 @@ struct NeutronCrossSection {
             float e = epsilon / 0.035f;
             xs.D[0]      = 1.35f;
             xs.D[1]      = 0.38f * (1.0f + 0.15f * (1.0f - rho_mod_rel));
-            xs.SigR[0]   = 0.025f * dopp;
-            xs.SigR[1]   = 0.120f * dopp * rho_mod_rel;
-            xs.SigS12    = 0.020f * rho_mod_rel;
-            xs.nuSigF[0] = 0.006f * e;
-            xs.nuSigF[1] = 0.095f * e;
+            xs.SigR[0]   = 0.033f * dopp;
+            xs.SigR[1]   = 0.200f * dopp * rho_mod_rel;
+            xs.SigS12    = 0.0175f * rho_mod_rel;
+            xs.nuSigF[0] = 0.0082f * e;
+            xs.nuSigF[1] = 0.3230f * e;   // calibré k_inf=1.10
             xs.chi[0]    = 0.98f;
             xs.chi[1]    = 0.02f;
-            xs.SigA[0]   = 0.008f;
-            xs.SigA[1]   = 0.075f * dopp;
+            xs.SigA[0]   = 0.010f;
+            xs.SigA[1]   = 0.160f * dopp * rho_mod_rel;
             break;
         }
 
@@ -75,8 +75,8 @@ struct NeutronCrossSection {
             xs.SigR[0]   = 0.018f * dopp;
             xs.SigR[1]   = 0.045f * dopp;
             xs.SigS12    = 0.015f * rho_mod_rel;
-            xs.nuSigF[0] = 0.004f * e;
-            xs.nuSigF[1] = 0.085f * e;
+            xs.nuSigF[0] = 0.0030f * e;
+            xs.nuSigF[1] = 0.1978f * e;   // calibré k_inf=1.05
             xs.chi[0]    = 0.98f;
             xs.chi[1]    = 0.02f;
             xs.SigA[0]   = 0.004f;
@@ -89,11 +89,11 @@ struct NeutronCrossSection {
             float e = epsilon / 0.15f;
             xs.D[0]      = 1.60f;
             xs.D[1]      = 1.40f;
-            xs.SigR[0]   = 0.030f * dopp;
+            xs.SigR[0]   = 0.0312f * dopp; // calibré k_inf=1.08
             xs.SigR[1]   = 0.040f * dopp;
-            xs.SigS12    = 0.003f;           // tres peu de ralentissement
-            xs.nuSigF[0] = 0.045f * e;       // fissions surtout rapides
-            xs.nuSigF[1] = 0.020f * e;
+            xs.SigS12    = 0.003f;
+            xs.nuSigF[0] = 0.0340f * e;
+            xs.nuSigF[1] = 0.0050f * e;
             xs.chi[0]    = 0.99f;
             xs.chi[1]    = 0.01f;
             xs.SigA[0]   = 0.012f;
@@ -106,11 +106,11 @@ struct NeutronCrossSection {
             float e = epsilon / 0.15f;
             xs.D[0]      = 2.40f;
             xs.D[1]      = 2.00f;
-            xs.SigR[0]   = 0.025f * dopp;
+            xs.SigR[0]   = 0.0275f * dopp; // calibré k_inf=1.08
             xs.SigR[1]   = 0.032f * dopp;
             xs.SigS12    = 0.002f;
-            xs.nuSigF[0] = 0.040f * e;
-            xs.nuSigF[1] = 0.015f * e;
+            xs.nuSigF[0] = 0.0300f * e;
+            xs.nuSigF[1] = 0.0140f * e;
             xs.chi[0]    = 0.99f;
             xs.chi[1]    = 0.01f;
             xs.SigA[0]   = 0.008f;
@@ -126,8 +126,8 @@ struct NeutronCrossSection {
             xs.SigR[0]   = 0.020f * dopp;
             xs.SigR[1]   = 0.080f * dopp;
             xs.SigS12    = 0.012f * rho_mod_rel;
-            xs.nuSigF[0] = 0.008f * e;
-            xs.nuSigF[1] = 0.090f * e;
+            xs.nuSigF[0] = 0.0050f * e;   // calibré k_inf=1.25
+            xs.nuSigF[1] = 0.1064f * e;   // calibré k_inf=1.06
             xs.chi[0]    = 0.98f;
             xs.chi[1]    = 0.02f;
             xs.SigA[0]   = 0.006f;

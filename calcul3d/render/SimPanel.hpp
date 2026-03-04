@@ -22,7 +22,7 @@ enum class SimState { STOPPED, RUNNING, PAUSED };
 struct SimControl {
     SimMode  mode     = SimMode::ACCELERE;
     SimState state    = SimState::STOPPED;
-    FluxMode fluxMode = FluxMode::COSINUS_REP;
+    FluxMode fluxMode = FluxMode::DIFFUSION_2G;  // modèle par défaut
 
     float speedFactor   = 1.0f;
     float simTime       = 0.0f;
@@ -56,7 +56,7 @@ struct SimPanel {
     }
 
     // gpuFluxActive : true si NeutronCompute GPU est disponible
-    bool update(SimControl& ctrl, int sw, int sh, bool gpuFluxActive = false) {
+    bool update(SimControl& ctrl, int sw, int sh, bool neutronAvail = false, bool gpuFluxActive = false) {
         if (IsKeyPressed(KEY_S)) { visible = !visible; inputFocus = false; }
         if (!visible) return false;
 
@@ -83,27 +83,51 @@ struct SimPanel {
             return clicked && CheckCollisionPointRec(mouse, r);
         };
 
-        if (gpuFluxActive) {
-            // GPU dispo : bandeau vert informatif
-            DrawRectangle(PX+8, y, PW-16, 20, {20,60,20,200});
-            DrawRectangleLines(PX+8, y, PW-16, 20, {60,180,60,255});
-            DrawText("GPU Diffusion 2 groupes ACTIF  [R] pour changer", PX+14, y+4, 11, {100,255,100,255});
-            y += 26;
-            // Fallback cosinus (secondaire, en gris)
-            DrawText("Fallback si GPU desactive :", PX+10, y, 11, {120,120,120,255}); y += 14;
-            if (radioBtn("Cosinus REP", ctrl.fluxMode == FluxMode::COSINUS_REP, PX+15, y))
-                { ctrl.fluxMode = FluxMode::COSINUS_REP; changed = true; }
-            if (radioBtn("Uniforme", ctrl.fluxMode == FluxMode::UNIFORME, PX+185, y))
-                { ctrl.fluxMode = FluxMode::UNIFORME; changed = true; }
-        } else {
-            // Pas de GPU : workflow classique
-            DrawText("Flux neutronique :", PX+10, y, 12, {180,180,180,255}); y += 17;
-            if (radioBtn("Cosinus REP", ctrl.fluxMode == FluxMode::COSINUS_REP, PX+15, y))
-                { ctrl.fluxMode = FluxMode::COSINUS_REP; changed = true; }
-            if (radioBtn("Uniforme", ctrl.fluxMode == FluxMode::UNIFORME, PX+185, y))
-                { ctrl.fluxMode = FluxMode::UNIFORME; changed = true; }
+        // ── Sélection du modèle de flux ──────────────────────────────
+        DrawText("Modele de flux :", PX+10, y, 12, {180,180,180,255}); y += 17;
+
+        // Ligne 1 : Diffusion 2G (cochable seulement si neutronAvail)
+        {
+            bool can2G   = neutronAvail;
+            bool active2G = (ctrl.fluxMode == FluxMode::DIFFUSION_2G);
+            // Si 2G vient d'être rendu dispo, forcer la sélection
+            if (can2G && ctrl.fluxMode != FluxMode::DIFFUSION_2G
+                      && ctrl.fluxMode != FluxMode::COSINUS_REP
+                      && ctrl.fluxMode != FluxMode::UNIFORME)
+                { ctrl.fluxMode = FluxMode::DIFFUSION_2G; changed = true; }
+
+            Color circCol = can2G ? (active2G ? Color{80,220,80,255} : Color{60,60,60,255})
+                                  : Color{50,50,50,180};
+            DrawCircle(PX+21, y+7, 6, active2G ? Color{80,220,80,255} : Color{30,30,30,200});
+            DrawCircleLines(PX+21, y+7, 6, can2G ? LIGHTGRAY : Color{70,70,70,255});
+
+            const char* lbl2G = gpuFluxActive
+                ? "Diffusion 2G (CPU+GPU)"
+                : (can2G ? "Diffusion 2G (CPU)" : "Diffusion 2G (non dispo)");
+            DrawText(lbl2G, PX+32, y, 12, can2G ? (active2G ? WHITE : LIGHTGRAY) : Color{80,80,80,255});
+
+            if (can2G) {
+                Rectangle r2g = {(float)(PX+8), (float)y, PW-16.0f, 16};
+                if (clicked && CheckCollisionPointRec(mouse, r2g))
+                    { ctrl.fluxMode = FluxMode::DIFFUSION_2G; changed = true; }
+            }
         }
-        y += 28;
+        y += 20;
+
+        // Ligne 2 : Cosinus REP
+        if (radioBtn("Cosinus REP", ctrl.fluxMode == FluxMode::COSINUS_REP, PX+15, y))
+            { ctrl.fluxMode = FluxMode::COSINUS_REP; changed = true; }
+        // Ligne 3 : Uniforme
+        if (radioBtn("Uniforme",    ctrl.fluxMode == FluxMode::UNIFORME,    PX+185, y))
+            { ctrl.fluxMode = FluxMode::UNIFORME;    changed = true; }
+        y += 24;
+
+        // Forcer 2G si neutronAvail et mode encore sur défaut cosinus au lancement
+        if (neutronAvail && ctrl.fluxMode == FluxMode::COSINUS_REP) {
+            // Ne pas forcer si l'utilisateur a explicitement choisi cosinus
+            // (on détecte par le fait que c'est la valeur par défaut non changée)
+        }
+        y += 4;
 
         // --- Mode temps ---
         DrawText("Mode temporel :", PX+10, y, 12, {180,180,180,255}); y += 17;
@@ -192,12 +216,20 @@ struct SimPanel {
         }
 
         // --- Stats ---
-        DrawRectangle(PX+10, y, PW-20, 68, {20,20,40,200});
-        DrawRectangleLines(PX+10, y, PW-20, 68, {60,60,90,255});
+        DrawRectangle(PX+10, y, PW-20, 82, {20,20,40,200});
+        DrawRectangleLines(PX+10, y, PW-20, 82, {60,60,90,255});
         snprintf(buf, sizeof(buf), "Temps simule : %.1f s", ctrl.simTime);
         DrawText(buf, PX+18, y+6,  12, LIGHTGRAY);
         snprintf(buf, sizeof(buf), "T min : %.1f C   T max : %.1f C", ctrl.T_min, ctrl.T_max);
         DrawText(buf, PX+18, y+22, 12, LIGHTGRAY);
+        // Modèle utilisé
+        const char* modUsed = (ctrl.fluxMode == FluxMode::DIFFUSION_2G) ? "Diffusion 2G"
+                            : (ctrl.fluxMode == FluxMode::COSINUS_REP)  ? "Cosinus REP"
+                            :                                              "Uniforme";
+        Color modCol = (ctrl.fluxMode == FluxMode::DIFFUSION_2G) ? Color{100,255,100,255}
+                                                                  : Color{200,200,80,255};
+        snprintf(buf, sizeof(buf), "Modele : %s", modUsed);
+        DrawText(buf, PX+18, y+38, 11, modCol);
         if (ctrl.speedFactor >= 1.0f)
             snprintf(buf, sizeof(buf), "Pas GPU/frame : %d", ctrl.stepsPerFrame);
         else

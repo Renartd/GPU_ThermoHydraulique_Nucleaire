@@ -159,6 +159,8 @@ int main() {
             reactorCfg.enrichment,
             params.tempEntree
         );
+        if (neutronAvailable)
+            simCtrl.fluxMode = FluxMode::DIFFUSION_2G;
     }
 
     NeutronFlux neutronFlux;
@@ -173,11 +175,9 @@ int main() {
     // [Bug4] puissance appliquée à phi_eff
     // [Bug7] tempSortie comme référence de normalisation puissance
     auto recalcFlux = [&](FluxMode mode) {
-        if (neutronAvailable && reactorCfg.useGPUFlux) {
-            // phi_eff tient compte de la puissance ET de la température sortie
-            // phi0 est normalisé tel que T_outlet = T_inlet + DeltaT_nominal
-            // On scale par (puissance/100) * (tempSortie-tempEntree)/DeltaT_ref
-            float DeltaT_ref = 40.0f; // °C à puissance nominale
+        if (mode == FluxMode::DIFFUSION_2G && neutronAvailable) {
+            // ── Modèle Diffusion 2 groupes CPU (± GPU) ──────────────────
+            float DeltaT_ref = 40.0f;
             float DeltaT_usr = params.tempSortie - params.tempEntree;
             float powerScale = (reactorCfg.puissance / 100.0f)
                              * (DeltaT_usr / DeltaT_ref);
@@ -192,7 +192,7 @@ int main() {
                         * neutronFlux.phi0
                         * neutronFlux.E_fission
                         * 1e6f * neutronFlux.scale
-                        * powerScale;  // [Bug4+Bug7]
+                        * powerScale;
                 }
             }
         } else {
@@ -273,9 +273,10 @@ int main() {
                     T_prev[i] = grid.cubes[i].temperature;
 
                 // Neutronique GPU — [Bug5] moderateur passé à rebuildXS
-                if (neutronAvailable && reactorCfg.useGPUFlux) {
+                if (neutronAvailable) {
+                    // CPU 2G (+ GPU si dispo) — reactorCfg.useGPUFlux controle GPU uniquement
                     neutronCompute.rebuildXS(grid, params.tempEntree,
-                                            reactorCfg.moderateur); // [Bug5]
+                                            reactorCfg.moderateur);
                     neutronCompute.step(5, 3);
                     neutronCompute.applyToGrid(grid);
                 }
@@ -335,6 +336,8 @@ int main() {
                 neutronAvailable = neutronCompute.init(
                     vkCtx, grid, reactorCfg.reactorType,
                     reactorCfg.enrichment, params.tempEntree);
+                if (neutronAvailable)
+                    simCtrl.fluxMode = FluxMode::DIFFUSION_2G;
             }
             recalcFlux(simCtrl.fluxMode);
         }
@@ -406,7 +409,8 @@ int main() {
         }
 
         // [Bug6] fluxDirty seulement si simulation n'est pas en cours
-        bool simChanged = simPanel.update(simCtrl, SW, SH, neutronAvailable);
+        bool simChanged = simPanel.update(simCtrl, SW, SH, neutronAvailable,
+                                                   neutronAvailable && neutronCompute.gpuAccel);
         if (simChanged) fluxDirty = true;
         if (fluxDirty && simCtrl.state != SimState::RUNNING)
             recalcFlux(simCtrl.fluxMode);  // [Bug6] pas en double
@@ -426,8 +430,11 @@ int main() {
         if (converged) {
             char buf[80];
             snprintf(buf, sizeof(buf),
-                     "CONVERGE a t=%.0f s  T_max=%.1f C",
-                     simCtrl.simTime, simCtrl.T_max);
+                     "CONVERGE a t=%.0f s  T_max=%.1f C  [%s]",
+                     simCtrl.simTime, simCtrl.T_max,
+                     simCtrl.fluxMode == FluxMode::DIFFUSION_2G ? "Diffusion 2G"
+                   : simCtrl.fluxMode == FluxMode::COSINUS_REP  ? "Cosinus REP"
+                   :                                               "Uniforme");
             int tw = MeasureText(buf, 16);
             // Bandeau en bas au centre, au-dessus de la barre de touches
             DrawRectangle(SW/2-tw/2-10, SH-42, tw+20, 22, {0,80,0,220});
@@ -447,7 +454,7 @@ int main() {
             DrawText("1. [R]  Choisir technologie + enrichissement",  gx+10, gy+32, 12, LIGHTGRAY);
             DrawText("        Cliquer  Appliquer",                    gx+10, gy+48, 12, {100,220,100,255});
             DrawText("2. [C]  Choisir caloporteur + activer",         gx+10, gy+64, 12, LIGHTGRAY);
-            DrawText("3. [S]  Start  (GPU Diffusion 2G actif auto)",  gx+10, gy+80, 12, LIGHTGRAY);
+            DrawText("3. [S]  Start  (Diffusion 2G CPU actif automatiquement)",  gx+10, gy+80, 12, LIGHTGRAY);
             DrawText("4. [H]  Plan de coupe 2D thermique",            gx+10, gy+96, 12, LIGHTGRAY);
             char tb[32]; snprintf(tb,sizeof(tb),"(disparait dans %.0fs)", 12.0-GetTime());
             DrawText(tb, gx+300, gy+112, 10, {80,80,80,255});
