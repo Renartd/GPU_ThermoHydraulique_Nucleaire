@@ -11,7 +11,7 @@
 #include "../physics/CoolantModel.hpp"
 #include "SimPanel.hpp"  // pour SimControl + SimState
 
-enum class CoolantDisplayMode { FLECHES, OVERLAY, FLECHES_COULEUR };
+enum class CoolantDisplayMode { FLECHES, FLECHES_COULEUR, OVERLAY };
 
 struct CoolantPanel {
     bool    visible      = false;

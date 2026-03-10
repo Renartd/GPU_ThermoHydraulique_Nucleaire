@@ -1,6 +1,8 @@
 # enrichissement=5
 # moderateur=1
 # puissance=32
+# tempEntree=280
+# tempSortie=320
 - - - - A A A - - - - 
 - - A A A A A A A - - 
 - A A A A A A A A A - 

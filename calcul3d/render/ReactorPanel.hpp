@@ -20,9 +20,9 @@ struct ReactorConfig {
     float       moderateur   = 1.0f;    // ratio densite moderateur — sync depuis ReactorParams
     float       puissance    = 100.0f;  // % puissance nominale — sync depuis ReactorParams
     bool        autoEnrich   = false;   // true = suit la techno selectionnee
-    bool showModerator  = true;
-    bool showReflector  = true;
-    bool showControlRod = true;
+    bool showModerator  = false;
+    bool showReflector  = false;
+    bool showControlRod = false;
     int  nReflectorRings = 1;
     bool changed = false;
     // Mode flux : true=GPU neutronique, false=fallback cosinus

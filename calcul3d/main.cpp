@@ -284,6 +284,28 @@ int main() {
                 // [Bug6] recalcFlux appelé une seule fois ici (pas en double)
                 recalcFlux(simCtrl.fluxMode);
 
+                // ── DEBUG: afficher q_vol et phi_total au frame 1 ────────
+                static int _dbgFrame = 0;
+                if (_dbgFrame < 3) {
+                    float qmax=0, qsum=0, phimax=0;
+                    for (float q : q_vol_flat) { qmax=fmaxf(qmax,q); qsum+=q; }
+                    if (neutronAvailable)
+                        for (float p : neutronCompute.phi_total) phimax=fmaxf(phimax,p);
+                    std::cout << "[DEBUG frame " << _dbgFrame
+                              << "] fluxMode=" << (int)simCtrl.fluxMode
+                              << " neutronAvail=" << neutronAvailable
+                              << " phi_max=" << phimax
+                              << " q_max=" << qmax
+                              << " q_sum=" << qsum
+                              << " stepsPerFrame=" << simCtrl.stepsPerFrame
+                              << " dt=" << thermalCompute.params.dt
+                              << " nSlices=" << grid.nSlices
+                              << " scale=" << neutronFlux.scale
+                              << "\n";
+                    _dbgFrame++;
+                }
+                // ─────────────────────────────────────────────────────────
+
                 thermalCompute.step(simCtrl.stepsPerFrame, q_vol_flat);
                 thermalCompute.applyToGrid(grid);
 
@@ -339,6 +361,9 @@ int main() {
                 if (neutronAvailable)
                     simCtrl.fluxMode = FluxMode::DIFFUSION_2G;
             }
+            // Resynchroniser le scale de neutronFlux avec le dt thermique courant
+            neutronFlux.init(thermalCompute.params.dt,
+                             thermalCompute.params.rho_cp, 2.0f);
             recalcFlux(simCtrl.fluxMode);
         }
 
@@ -350,39 +375,24 @@ int main() {
             thermalCompute.reinit(vkCtx, grid, params.tempEntree, simCtrl.nSlices);
             grid.nSlices           = simCtrl.nSlices;
             simCtrl.dt_current     = thermalCompute.params.dt;
+            // ── FIX scale : recalculer neutronFlux.scale avec le nouveau dt ──
+            // Sans ça, 32 tranches (dt plus petit) → scale trop faible → T~300°C
+            // ou 4 tranches (dt plus grand) → scale trop fort → T~1500°C
+            neutronFlux.init(thermalCompute.params.dt,
+                             thermalCompute.params.rho_cp, 2.0f);
             thermalCompute.applyToGrid(grid);
-            converged              = false;  // [BugConv] reset convergence
+            converged              = false;  // [BugConv]
             maxDeltaT              = 999.0f; // [BugConv]
             simCtrl.simTime        = 0.0f;
+            fluxDirty              = true;
         }
 
         // ----------------------------------------------------------------
         //  Panneau réacteur [R]
         //  [Bug3] on recopie les sliders vers ReactorParams si changed
         // ----------------------------------------------------------------
-        reactorPanel.update(reactorCfg,
-            neutronAvailable ? neutronCompute.k_eff : 1.0f, simCtrl, SW, SH);
-
-        if (reactorCfg.changed) {
-            reactorCfg.changed = false;
-            // Sync retour vers ReactorParams (puissance, moderateur, enrichissement)
-            params.enrichissement = reactorCfg.enrichment  * 100.0f;
-            params.moderateur     = reactorCfg.moderateur;
-            params.puissance      = reactorCfg.puissance;
-            // Reinit zones + neutronique
-            grid.autoGenerateZones(reactorCfg.nReflectorRings);
-            if (neutronAvailable) neutronCompute.cleanup();
-            neutronAvailable = neutronCompute.init(
-                vkCtx, grid, reactorCfg.reactorType,
-                reactorCfg.enrichment, params.tempEntree);
-            converged     = false;
-            maxDeltaT     = 999.0f;
-            simCtrl.simTime = 0.0f;
-            fluxDirty     = true;
-        }
-
         // ================================================================
-        //  Rendu
+        //  Rendu  (reactorPanel déplacé après EndMode3D pour passer devant le 3D)
         // ================================================================
         BeginDrawing();
         ClearBackground({25,25,30,255});
@@ -395,6 +405,26 @@ int main() {
             modRenderer.draw(grid, renderOpt, (float)GetTime());
             coolantPanel.draw3DArrows(grid, coolantModel, renderOpt);
         EndMode3D();
+
+        // ── Panneau réacteur — dessiné APRÈS EndMode3D → devant le cœur 3D ──
+        reactorPanel.update(reactorCfg,
+            neutronAvailable ? neutronCompute.k_eff : 1.0f, simCtrl, SW, SH);
+
+        if (reactorCfg.changed) {
+            reactorCfg.changed = false;
+            params.enrichissement = reactorCfg.enrichment  * 100.0f;
+            params.moderateur     = reactorCfg.moderateur;
+            params.puissance      = reactorCfg.puissance;
+            grid.autoGenerateZones(reactorCfg.nReflectorRings);
+            if (neutronAvailable) neutronCompute.cleanup();
+            neutronAvailable = neutronCompute.init(
+                vkCtx, grid, reactorCfg.reactorType,
+                reactorCfg.enrichment, params.tempEntree);
+            converged       = false;
+            maxDeltaT       = 999.0f;
+            simCtrl.simTime = 0.0f;
+            fluxDirty       = true;
+        }
 
         drawHUD(SW, SH, params, grid, renderOpt);
         drawConvergenceOverlay(SW, SH, simCtrl, maxDeltaT,
