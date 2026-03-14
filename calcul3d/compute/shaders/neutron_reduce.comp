@@ -1,0 +1,59 @@
+#version 450
+// ============================================================
+//  neutron_reduce.comp  —  Réduction GPU pour k_eff
+//
+//  Calcule la source de fission totale :
+//    F = Σᵢ (νΣF1[i]·φ1[i] + νΣF2[i]·φ2[i])
+//
+//  Algorithme : réduction binaire en shared memory
+//    8 étapes pour 256 éléments → sdata[0] = somme du workgroup
+//    Chaque workgroup écrit sa somme partielle dans partial_sums[wgid]
+//    Le CPU additionne les partial_sums (N_workgroups ≤ ~20 éléments)
+//
+//  XS LAYOUT : SoA (binding 2 et 3 pour nuSF1 et nuSF2)
+//
+//  Readback : seulement N_workgroups floats (ex: 2 floats pour N=400)
+//             au lieu de N×8 octets — gain ×200 sur la bande passante PCIe
+// ============================================================
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+shared float sdata[256];
+
+layout(set=0, binding=0) buffer Phi1    { float phi1[];    };
+layout(set=0, binding=1) buffer Phi2    { float phi2[];    };
+layout(set=0, binding=2) buffer XSnuSF1 { float xs_nuSF1[]; };  // SoA
+layout(set=0, binding=3) buffer XSnuSF2 { float xs_nuSF2[]; };  // SoA
+layout(set=0, binding=4) buffer ZoneBuf { int   zone_buf[]; };
+layout(set=0, binding=5) buffer PartSum { float partial_sums[]; };
+
+layout(set=0, binding=6) uniform ReduceParams {
+    int total2d;
+    int _pad[3];
+};
+
+void main() {
+    uint tid  = gl_LocalInvocationID.x;    // 0..255 dans le workgroup
+    uint gid  = gl_GlobalInvocationID.x;   // index global
+    uint wgid = gl_WorkGroupID.x;          // index workgroup
+
+    // Contribution de cette cellule (0 si hors grille ou zone vide)
+    float val = 0.0;
+    if (gid < uint(total2d) && zone_buf[gid] != 0) {
+        val = xs_nuSF1[gid]*phi1[gid] + xs_nuSF2[gid]*phi2[gid];
+    }
+    sdata[tid] = val;
+
+    barrier();
+
+    // ── Réduction binaire : log₂(256) = 8 étapes ────────────
+    for (uint s = 128u; s > 0u; s >>= 1u) {
+        if (tid < s) sdata[tid] += sdata[tid + s];
+        barrier();
+    }
+
+    // Thread 0 écrit la somme partielle de ce workgroup
+    if (tid == 0u) {
+        partial_sums[wgid] = sdata[0];
+    }
+}

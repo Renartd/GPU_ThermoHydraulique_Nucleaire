@@ -5,13 +5,14 @@
 //  [F] : cycle mode affichage (géré dans main.cpp)
 // ============================================================
 #include <raylib.h>
+#include "ColorMap.hpp"
 #include <cstdio>
 #include <cmath>
 #include <cstring>
 #include "../physics/CoolantModel.hpp"
 #include "SimPanel.hpp"  // pour SimControl + SimState
 
-enum class CoolantDisplayMode { FLECHES, FLECHES_COULEUR, OVERLAY };
+enum class CoolantDisplayMode { FLECHES, OVERLAY, FLECHES_COULEUR };
 
 struct CoolantPanel {
     bool    visible      = false;

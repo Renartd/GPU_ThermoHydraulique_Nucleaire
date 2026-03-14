@@ -1,291 +1,276 @@
 #pragma once
 // ============================================================
-//  VulkanContext.hpp
-//  Initialise le device Vulkan avec les extensions RT requises
-//  Extensions nécessaires :
-//    VK_KHR_acceleration_structure
-//    VK_KHR_ray_query
-//    VK_KHR_deferred_host_operations
-//    VK_KHR_spirv_1_4
-//    VK_KHR_shader_float_controls
+//  VulkanContext.hpp  v2.0
+//
+//  Contexte Vulkan minimal pour le simulateur.
+//  Fournit : instance, device, queue, cmdPool, descriptorPool
+//
+//  AJOUTS v2 :
+//    - uploadToDeviceLocal(buffer, data, size) : staging auto
+//    - createComputePipeline(spvPath, layout, shaderModule)
+//    - descriptorPool agrandi pour 17 bindings × 2 sets FVM + reduce
 // ============================================================
-
 #include <vulkan/vulkan.h>
-#include <iostream>
-#include <vector>
-#include <string>
-#include <cstring>
 #include <stdexcept>
+#include <string>
+#include <vector>
+#include <fstream>
+#include <iostream>
+#include <cstring>
 
-// ============================================================
-//  Macro utilitaire
-// ============================================================
-#define VK_CHECK(call) \
-    do { \
-        VkResult _r = (call); \
-        if (_r != VK_SUCCESS) { \
-            std::cerr << "[Vulkan] Erreur " << _r \
-                      << " dans " << #call \
-                      << " (" << __FILE__ << ":" << __LINE__ << ")\n"; \
-            throw std::runtime_error("Vulkan error"); \
-        } \
-    } while(0)
+#define VK_CHECK_CTX(call) do { \
+    VkResult _r=(call); \
+    if(_r!=VK_SUCCESS) \
+        throw std::runtime_error(std::string("[VkCtx] ")+#call+" = "+std::to_string(_r)); \
+} while(0)
 
-// ============================================================
-//  Extensions requises
-// ============================================================
-static const std::vector<const char*> DEVICE_EXTENSIONS = {
-    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-    VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
-    VK_KHR_RAY_QUERY_EXTENSION_NAME,
-    VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
-    VK_KHR_SPIRV_1_4_EXTENSION_NAME,
-    VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME,
-    VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
-    VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
-};
-
-// ============================================================
-//  Structure principale du contexte Vulkan
-// ============================================================
 struct VulkanContext {
+    VkInstance       instance       = VK_NULL_HANDLE;
+    VkPhysicalDevice physDev        = VK_NULL_HANDLE;
+    VkDevice         device         = VK_NULL_HANDLE;
+    VkQueue          computeQueue   = VK_NULL_HANDLE;
+    VkCommandPool    cmdPool        = VK_NULL_HANDLE;
+    VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
+    uint32_t         queueFamily    = 0;
 
-    VkInstance               instance       = VK_NULL_HANDLE;
-    VkPhysicalDevice         physDevice     = VK_NULL_HANDLE;
-    VkDevice                 device         = VK_NULL_HANDLE;
-    VkQueue                  computeQueue   = VK_NULL_HANDLE;
-    uint32_t                 computeFamily  = 0;
-    VkCommandPool            cmdPool        = VK_NULL_HANDLE;
-    VkDescriptorPool         descPool       = VK_NULL_HANDLE;
+    VkPhysicalDeviceMemoryProperties memProps{};
 
-    // Propriétés RT
-    VkPhysicalDeviceRayQueryFeaturesKHR           rayQueryFeatures{};
-    VkPhysicalDeviceAccelerationStructureFeaturesKHR accelFeatures{};
-
-    bool rtSupported = false;
-
-    // --------------------------------------------------------
-    //  Initialisation complète
-    // --------------------------------------------------------
-    bool init() {
-        try {
-            createInstance();
-            pickPhysicalDevice();
-            createDevice();
-            createCommandPool();
-            createDescriptorPool();
-            rtSupported = true;
-            std::cout << "[VulkanContext] RT initialisé avec succès\n";
-            return true;
-        } catch (const std::exception& e) {
-            std::cerr << "[VulkanContext] Echec init : " << e.what() << "\n";
-            rtSupported = false;
-            return false;
-        }
+    // ── Initialisation complète ──────────────────────────────
+    void init() {
+        _createInstance();
+        _pickPhysicalDevice();
+        _createDevice();
+        _createCommandPool();
+        _createDescriptorPool();
+        vkGetPhysicalDeviceMemoryProperties(physDev, &memProps);
+        std::cout << "[VulkanContext] Init OK\n";
     }
 
+    // ── Nettoyage ────────────────────────────────────────────
     void cleanup() {
-        if (descPool)  vkDestroyDescriptorPool(device, descPool, nullptr);
-        if (cmdPool)   vkDestroyCommandPool(device, cmdPool, nullptr);
-        if (device)    vkDestroyDevice(device, nullptr);
-        if (instance)  vkDestroyInstance(instance, nullptr);
+        if (descriptorPool) {
+            vkDestroyDescriptorPool(device, descriptorPool, nullptr);
+            descriptorPool = VK_NULL_HANDLE;
+        }
+        if (cmdPool) {
+            vkDestroyCommandPool(device, cmdPool, nullptr);
+            cmdPool = VK_NULL_HANDLE;
+        }
+        if (device) { vkDestroyDevice(device, nullptr); device = VK_NULL_HANDLE; }
+        if (instance){ vkDestroyInstance(instance, nullptr); instance = VK_NULL_HANDLE; }
     }
 
-    // --------------------------------------------------------
-    //  Utilitaire : trouver le type de mémoire
-    // --------------------------------------------------------
-    uint32_t findMemoryType(uint32_t filter, VkMemoryPropertyFlags props) const {
-        VkPhysicalDeviceMemoryProperties memProps;
-        vkGetPhysicalDeviceMemoryProperties(physDevice, &memProps);
-        for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i)
-            if ((filter & (1 << i)) &&
-                (memProps.memoryTypes[i].propertyFlags & props) == props)
-                return i;
-        throw std::runtime_error("Aucun type mémoire compatible trouvé");
-    }
-
-    // --------------------------------------------------------
-    //  Utilitaire : créer un buffer
-    // --------------------------------------------------------
-    void createBuffer(VkDeviceSize size,
-                      VkBufferUsageFlags usage,
-                      VkMemoryPropertyFlags props,
-                      VkBuffer& buf,
-                      VkDeviceMemory& mem) const {
-        VkBufferCreateInfo bi{};
-        bi.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bi.size        = size;
-        bi.usage       = usage;
-        bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        VK_CHECK(vkCreateBuffer(device, &bi, nullptr, &buf));
+    // ── Allocation buffer ────────────────────────────────────
+    void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
+                      VkMemoryPropertyFlags memFlags,
+                      VkBuffer& outBuf, VkDeviceMemory& outMem)
+    {
+        VkBufferCreateInfo bCI{};
+        bCI.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bCI.size        = size;
+        bCI.usage       = usage;
+        bCI.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VK_CHECK_CTX(vkCreateBuffer(device, &bCI, nullptr, &outBuf));
 
         VkMemoryRequirements req;
-        vkGetBufferMemoryRequirements(device, buf, &req);
+        vkGetBufferMemoryRequirements(device, outBuf, &req);
 
-        VkMemoryAllocateFlagsInfo flagsInfo{};
-        flagsInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
-        flagsInfo.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
-
-        VkMemoryAllocateInfo ai{};
-        ai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        ai.pNext           = &flagsInfo;
-        ai.allocationSize  = req.size;
-        ai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, props);
-        VK_CHECK(vkAllocateMemory(device, &ai, nullptr, &mem));
-        VK_CHECK(vkBindBufferMemory(device, buf, mem, 0));
+        VkMemoryAllocateInfo allocCI{};
+        allocCI.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocCI.allocationSize  = req.size;
+        allocCI.memoryTypeIndex = _findMemType(req.memoryTypeBits, memFlags);
+        VK_CHECK_CTX(vkAllocateMemory(device, &allocCI, nullptr, &outMem));
+        VK_CHECK_CTX(vkBindBufferMemory(device, outBuf, outMem, 0));
     }
 
-    // --------------------------------------------------------
-    //  Utilitaire : command buffer one-shot
-    // --------------------------------------------------------
-    VkCommandBuffer beginOneShot() const {
+    // ── Upload vers DEVICE_LOCAL via staging buffer ───────────
+    void uploadToDeviceLocal(VkBuffer dst, const void* data, VkDeviceSize size) {
+        VkBuffer stageBuf; VkDeviceMemory stageMem;
+        createBuffer(size,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            stageBuf, stageMem);
+
+        void* ptr;
+        vkMapMemory(device, stageMem, 0, size, 0, &ptr);
+        memcpy(ptr, data, size);
+        vkUnmapMemory(device, stageMem);
+
+        auto cb = beginOneShot();
+        VkBufferCopy reg{0,0,size};
+        vkCmdCopyBuffer(cb, stageBuf, dst, 1, &reg);
+        endOneShot(cb);
+
+        vkDestroyBuffer(device, stageBuf, nullptr);
+        vkFreeMemory(device, stageMem, nullptr);
+    }
+
+    // ── Création pipeline compute depuis .spv ─────────────────
+    VkPipeline createComputePipeline(const std::string& spvPath,
+                                     VkPipelineLayout layout,
+                                     VkShaderModule& outModule)
+    {
+        // Lecture du .spv
+        std::ifstream f(spvPath, std::ios::binary | std::ios::ate);
+        if (!f.is_open())
+            throw std::runtime_error("[VkCtx] Shader introuvable : " + spvPath);
+        size_t sz = f.tellg(); f.seekg(0);
+        std::vector<uint32_t> code(sz / 4);
+        f.read(reinterpret_cast<char*>(code.data()), sz);
+
+        VkShaderModuleCreateInfo smCI{};
+        smCI.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        smCI.codeSize = sz;
+        smCI.pCode    = code.data();
+        VK_CHECK_CTX(vkCreateShaderModule(device, &smCI, nullptr, &outModule));
+
+        VkPipelineShaderStageCreateInfo stageCI{};
+        stageCI.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stageCI.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+        stageCI.module = outModule;
+        stageCI.pName  = "main";
+
+        VkComputePipelineCreateInfo cpCI{};
+        cpCI.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        cpCI.stage  = stageCI;
+        cpCI.layout = layout;
+
+        VkPipeline pipeline;
+        VK_CHECK_CTX(vkCreateComputePipelines(device, VK_NULL_HANDLE,
+                                              1, &cpCI, nullptr, &pipeline));
+        // Le shader module peut être détruit après la création du pipeline
+        // On le garde pour le cleanup — le appelant est responsable
+        return pipeline;
+    }
+
+    // ── Command buffer one-shot ───────────────────────────────
+    VkCommandBuffer beginOneShot() {
         VkCommandBufferAllocateInfo ai{};
         ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         ai.commandPool        = cmdPool;
         ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         ai.commandBufferCount = 1;
         VkCommandBuffer cb;
-        VK_CHECK(vkAllocateCommandBuffers(device, &ai, &cb));
+        VK_CHECK_CTX(vkAllocateCommandBuffers(device, &ai, &cb));
+
         VkCommandBufferBeginInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        VK_CHECK(vkBeginCommandBuffer(cb, &bi));
+        VK_CHECK_CTX(vkBeginCommandBuffer(cb, &bi));
         return cb;
     }
 
-    void endOneShot(VkCommandBuffer cb) const {
-        VK_CHECK(vkEndCommandBuffer(cb));
+    void endOneShot(VkCommandBuffer cb) {
+        VK_CHECK_CTX(vkEndCommandBuffer(cb));
+
         VkSubmitInfo si{};
         si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         si.commandBufferCount = 1;
         si.pCommandBuffers    = &cb;
-        VK_CHECK(vkQueueSubmit(computeQueue, 1, &si, VK_NULL_HANDLE));
-        VK_CHECK(vkQueueWaitIdle(computeQueue));
+        VK_CHECK_CTX(vkQueueSubmit(computeQueue, 1, &si, VK_NULL_HANDLE));
+        VK_CHECK_CTX(vkQueueWaitIdle(computeQueue));
         vkFreeCommandBuffers(device, cmdPool, 1, &cb);
     }
 
 private:
-
-    // --------------------------------------------------------
-    void createInstance() {
-        VkApplicationInfo ai{};
-        ai.sType              = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-        ai.pApplicationName   = "calcul3d";
-        ai.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-        ai.apiVersion         = VK_API_VERSION_1_3;
-
-        // Extensions instance
-        std::vector<const char*> instExts = {
-            VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME
-        };
+    void _createInstance() {
+        VkApplicationInfo app{};
+        app.sType      = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+        app.apiVersion = VK_API_VERSION_1_3;
 
         VkInstanceCreateInfo ci{};
-        ci.sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-        ci.pApplicationInfo        = &ai;
-        ci.enabledExtensionCount   = (uint32_t)instExts.size();
-        ci.ppEnabledExtensionNames = instExts.data();
-        VK_CHECK(vkCreateInstance(&ci, nullptr, &instance));
+        ci.sType            = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        ci.pApplicationInfo = &app;
+
+#ifndef NDEBUG
+        const char* layers[] = {"VK_LAYER_KHRONOS_validation"};
+        ci.enabledLayerCount   = 1;
+        ci.ppEnabledLayerNames = layers;
+#endif
+        VK_CHECK_CTX(vkCreateInstance(&ci, nullptr, &instance));
     }
 
-    // --------------------------------------------------------
-    void pickPhysicalDevice() {
-        uint32_t count = 0;
-        vkEnumeratePhysicalDevices(instance, &count, nullptr);
-        if (count == 0) throw std::runtime_error("Aucun GPU Vulkan trouvé");
+    void _pickPhysicalDevice() {
+        uint32_t cnt=0;
+        vkEnumeratePhysicalDevices(instance, &cnt, nullptr);
+        if (!cnt) throw std::runtime_error("[VkCtx] Aucun GPU Vulkan");
+        std::vector<VkPhysicalDevice> devs(cnt);
+        vkEnumeratePhysicalDevices(instance, &cnt, devs.data());
 
-        std::vector<VkPhysicalDevice> devices(count);
-        vkEnumeratePhysicalDevices(instance, &count, devices.data());
-
-        // Préférer le GPU intégré AMD
-        for (auto& d : devices) {
-            VkPhysicalDeviceProperties props;
-            vkGetPhysicalDeviceProperties(d, &props);
-            if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
-                physDevice = d;
-                std::cout << "[VulkanContext] GPU : " << props.deviceName << "\n";
-                return;
-            }
-        }
-        // Fallback : premier GPU
-        physDevice = devices[0];
-    }
-
-    // --------------------------------------------------------
-    void createDevice() {
-        // Trouver la queue compute
-        uint32_t qCount = 0;
-        vkGetPhysicalDeviceQueueFamilyProperties(physDevice, &qCount, nullptr);
-        std::vector<VkQueueFamilyProperties> qProps(qCount);
-        vkGetPhysicalDeviceQueueFamilyProperties(physDevice, &qCount, qProps.data());
-
-        computeFamily = UINT32_MAX;
-        for (uint32_t i = 0; i < qCount; ++i) {
-            if (qProps[i].queueFlags & VK_QUEUE_COMPUTE_BIT) {
-                computeFamily = i;
+        // Préfère un GPU discret
+        physDev = devs[0];
+        for (auto d : devs) {
+            VkPhysicalDeviceProperties p;
+            vkGetPhysicalDeviceProperties(d, &p);
+            if (p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+                physDev = d;
+                VkPhysicalDeviceProperties pp;
+                vkGetPhysicalDeviceProperties(physDev, &pp);
+                std::cout << "[VkCtx] GPU : " << pp.deviceName << "\n";
                 break;
             }
         }
-        if (computeFamily == UINT32_MAX)
-            throw std::runtime_error("Pas de queue compute");
-
-        float prio = 1.0f;
-        VkDeviceQueueCreateInfo qci{};
-        qci.sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        qci.queueFamilyIndex = computeFamily;
-        qci.queueCount       = 1;
-        qci.pQueuePriorities = &prio;
-
-        // Chaîne de features RT
-        VkPhysicalDeviceBufferDeviceAddressFeatures bdaFeatures{};
-        bdaFeatures.sType               = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
-        bdaFeatures.bufferDeviceAddress = VK_TRUE;
-
-        accelFeatures.sType                 = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
-        accelFeatures.accelerationStructure = VK_TRUE;
-        accelFeatures.pNext                 = &bdaFeatures;
-
-        rayQueryFeatures.sType    = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
-        rayQueryFeatures.rayQuery = VK_TRUE;
-        rayQueryFeatures.pNext    = &accelFeatures;
-
-        VkPhysicalDeviceFeatures2 features2{};
-        features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        features2.pNext = &rayQueryFeatures;
-
-        VkDeviceCreateInfo dci{};
-        dci.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-        dci.pNext                   = &features2;
-        dci.queueCreateInfoCount    = 1;
-        dci.pQueueCreateInfos       = &qci;
-        dci.enabledExtensionCount   = (uint32_t)DEVICE_EXTENSIONS.size();
-        dci.ppEnabledExtensionNames = DEVICE_EXTENSIONS.data();
-        VK_CHECK(vkCreateDevice(physDevice, &dci, nullptr, &device));
-
-        vkGetDeviceQueue(device, computeFamily, 0, &computeQueue);
     }
 
-    // --------------------------------------------------------
-    void createCommandPool() {
+    void _createDevice() {
+        uint32_t qfCnt=0;
+        vkGetPhysicalDeviceQueueFamilyProperties(physDev, &qfCnt, nullptr);
+        std::vector<VkQueueFamilyProperties> qf(qfCnt);
+        vkGetPhysicalDeviceQueueFamilyProperties(physDev, &qfCnt, qf.data());
+
+        queueFamily = UINT32_MAX;
+        for (uint32_t i=0;i<qfCnt;i++)
+            if (qf[i].queueFlags & VK_QUEUE_COMPUTE_BIT) {
+                queueFamily=i; break;
+            }
+        if (queueFamily==UINT32_MAX)
+            throw std::runtime_error("[VkCtx] Pas de queue COMPUTE");
+
+        float prio=1.0f;
+        VkDeviceQueueCreateInfo qCI{};
+        qCI.sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        qCI.queueFamilyIndex = queueFamily;
+        qCI.queueCount       = 1;
+        qCI.pQueuePriorities = &prio;
+
+        VkDeviceCreateInfo dCI{};
+        dCI.sType                = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        dCI.queueCreateInfoCount = 1;
+        dCI.pQueueCreateInfos    = &qCI;
+        VK_CHECK_CTX(vkCreateDevice(physDev, &dCI, nullptr, &device));
+        vkGetDeviceQueue(device, queueFamily, 0, &computeQueue);
+    }
+
+    void _createCommandPool() {
         VkCommandPoolCreateInfo ci{};
         ci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        ci.queueFamilyIndex = computeFamily;
+        ci.queueFamilyIndex = queueFamily;
         ci.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        VK_CHECK(vkCreateCommandPool(device, &ci, nullptr, &cmdPool));
+        VK_CHECK_CTX(vkCreateCommandPool(device, &ci, nullptr, &cmdPool));
     }
 
-    // --------------------------------------------------------
-    void createDescriptorPool() {
-        std::vector<VkDescriptorPoolSize> sizes = {
-            {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 4},
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             64},  // ThermalCompute+NeutronCompute+marge
-            {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,              4},
-            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,             16},
+    void _createDescriptorPool() {
+        // FVM pipeline : 16 STORAGE + 1 UNIFORM × 2 sets (AB+BA)
+        // Reduce pipeline : 5 STORAGE + 1 UNIFORM × 2 sets (A+B)
+        // → Total : (16×2 + 5×2) = 42 STORAGE + (1×2 + 1×2) = 4 UNIFORM
+        // On double pour marge
+        VkDescriptorPoolSize sizes[] = {
+            { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 100 },
+            { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,  20 },
         };
         VkDescriptorPoolCreateInfo ci{};
         ci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        ci.maxSets       = 32;
-        ci.poolSizeCount = (uint32_t)sizes.size();
-        ci.pPoolSizes    = sizes.data();
-        VK_CHECK(vkCreateDescriptorPool(device, &ci, nullptr, &descPool));
+        ci.maxSets       = 20;
+        ci.poolSizeCount = 2;
+        ci.pPoolSizes    = sizes;
+        VK_CHECK_CTX(vkCreateDescriptorPool(device, &ci, nullptr, &descriptorPool));
+    }
+
+    uint32_t _findMemType(uint32_t typeBits, VkMemoryPropertyFlags flags) {
+        for (uint32_t i=0;i<memProps.memoryTypeCount;i++)
+            if ((typeBits&(1u<<i)) &&
+                (memProps.memoryTypes[i].propertyFlags&flags)==flags)
+                return i;
+        throw std::runtime_error("[VkCtx] Type mémoire introuvable");
     }
 };

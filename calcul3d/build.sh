@@ -1,30 +1,55 @@
 #!/bin/bash
-echo "=== Build calcul3d ==="
+# ============================================================
+#  build.sh  v2.0
+#  Compilation du simulateur neutronique-thermique
+# ============================================================
 
-# --- 1. Shaders GLSL → SPIR-V ---
-echo "[1/2] Compilation shaders..."
+echo "=== Compilation shaders SPIR-V ==="
+
+SHADER_DIR="compute/shaders"
 
 compile_shader() {
-    glslangValidator -V --target-env vulkan1.3 "$1" -o "$2" \
-        && echo "      OK : $2" \
-        || echo "      WARN : echec $1"
+    local src="$1"
+    local spv="${src%.comp}.spv"
+    echo "  $src → $spv"
+    glslangValidator -V --target-env vulkan1.3 "$src" -o "$spv"
+    if [ $? -ne 0 ]; then
+        echo "ERREUR shader : $src"
+        exit 1
+    fi
 }
 
-compile_shader compute/shaders/shadow_rq.comp  compute/shaders/shadow_rq.spv
-compile_shader compute/shaders/diffusion.comp  compute/shaders/diffusion.spv
+# Shaders thermiques (inchangés)
+compile_shader "$SHADER_DIR/diffusion.comp"
 
-# --- 2. C++ ---
-echo "[2/2] Compilation C++..."
-g++ main.cpp \
-    core/AssemblageLoader.cpp \
-    -I. \
-    -o viewer_raylib \
-    -lraylib -lvulkan -lGL -lm -lpthread -ldl -lrt -lX11 \
-    -std=c++17 \
-    -O2
+# Shaders neutroniques v2 (SoA + FVM)
+compile_shader "$SHADER_DIR/neutron_fvm.comp"
+compile_shader "$SHADER_DIR/neutron_reduce.comp"
+
+echo "=== Shaders OK ==="
+echo ""
+echo "=== Compilation C++ ==="
+
+CXX=g++
+CXXFLAGS="-std=c++17 -O2 -Wno-deprecated-declarations"
+
+INCLUDES="-I. -I/usr/include"
+
+LIBS="-lraylib -lvulkan -lGL -lm -lpthread -ldl -lrt -lX11"
+
+# Trouver tous les .cpp sauf les doublons obsolètes
+SRCS=$(find . -name "*.cpp" \
+       -not -path "*/files/*" \
+       -not -name "ReactorParams.cpp")
+
+echo "Sources :"
+echo "$SRCS"
+
+$CXX $CXXFLAGS $INCLUDES $SRCS -o viewer_raylib $LIBS
 
 if [ $? -eq 0 ]; then
-    echo "=== OK : ./viewer_raylib ==="
+    echo "=== Build OK → ./viewer_raylib ==="
 else
-    echo "=== Echec compilation C++ ==="
+    echo "=== ERREUR de compilation ==="
+    exit 1
 fi

@@ -16,6 +16,15 @@
 #include "VulkanContext.hpp"
 #include "../core/GridData.hpp"
 
+// VK_CHECK local (défini aussi dans NeutronCompute — guard contre double-def)
+#ifndef VK_CHECK
+#define VK_CHECK(call) do { \
+    VkResult _r=(call); \
+    if(_r!=VK_SUCCESS) \
+        throw std::runtime_error(std::string("[VK] ")+#call+" = "+std::to_string(_r)); \
+} while(0)
+#endif
+
 // ============================================================
 //  SimParams — doit correspondre exactement au uniform du shader
 // ============================================================
@@ -350,7 +359,7 @@ private:
         VkDescriptorSetLayout layouts[2] = {_descSetLayout, _descSetLayout};
         VkDescriptorSetAllocateInfo ai{};
         ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        ai.descriptorPool = _ctx->descPool;
+        ai.descriptorPool = _ctx->descriptorPool;
         ai.descriptorSetCount = 2; ai.pSetLayouts = layouts;
         VkDescriptorSet sets[2];
         VK_CHECK(vkAllocateDescriptorSets(_ctx->device, &ai, sets));

@@ -18,7 +18,7 @@ inline void drawGrid3DAxial(const GridData& grid,
     if (ropt.showGrid) DrawGrid(40, 1.0f);
     float cubeH = ropt.cubeHeight;
     float cubeW = ropt.cubeSize;
-    int   ns    = grid.nSlices > 0 ? grid.nSlices : 8;
+    int   ns    = grid.slices > 0 ? grid.slices : 8;
     float sliceH = cubeH / (float)ns;
 
     float tMin = grid.tempMin;
@@ -70,7 +70,7 @@ inline void drawGrid3DAxialWithShadows(const GridData& grid,
     if (ropt.showGrid) DrawGrid(40, 1.0f);
     float cubeH  = ropt.cubeHeight;
     float cubeW  = ropt.cubeSize;
-    int   ns     = grid.nSlices > 0 ? grid.nSlices : 8;
+    int   ns     = grid.slices > 0 ? grid.slices : 8;
     float sliceH = cubeH / (float)ns;
 
     float tMin = grid.tempMin;

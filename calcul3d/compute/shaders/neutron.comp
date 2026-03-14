@@ -2,152 +2,132 @@
 // ============================================================
 //  neutron.comp  —  Diffusion neutronique FDM 2 groupes
 //
-//  Groupe 1 = neutrons rapides   (E > 0.625 eV)
-//  Groupe 2 = neutrons thermiques (E < 0.625 eV)
+//  Schéma SEMI-IMPLICITE (identique au solveur CPU) :
 //
-//  Iteration explicite :
-//    phi_g^(n+1) = phi_g^n + dt*v_g * [
-//        nabla.(D_g * nabla phi_g)    <- diffusion
-//      - SigR_g * phi_g               <- retrait (abs + fuite groupe)
-//      + SigS12 * phi1                <- source de ralentissement (g1->g2 seulement)
-//      + (chi_g / k_eff) * sum_g'(nuSigF_g' * phi_g')  <- fission
-//    ]
+//    phi_g^(n+1) = [phi_g^n + dt·v_g·(L_g + src_g)] / (1 + dt·v_g·SigR_g)
 //
-//  XS buffer : 9 floats par cellule 2D
+//  L_g = ∇·(D_g·∇φ_g)  laplacien hétérogène (moyenne harmonique aux interfaces)
+//  src1 = chi1 · Fsrc/k
+//  src2 = chi2 · Fsrc/k + SigS12·phi1     (ralentissement g1→g2)
+//  Fsrc = nuSigF1·phi1 + nuSigF2·phi2
+//
+//  Par rapport au schéma explicite précédent :
+//    - SigR traité implicitement → stabilité inconditionnelle sur l'absorption
+//    - Même précision sur la diffusion (laplacien explicite)
+//    - k_eff injecté depuis CPU (mis à jour via neutron_reduce.comp)
+//
+//  XS buffer layout (9 floats/cellule) :
 //    [0]=D1  [1]=D2  [2]=SigR1  [3]=SigR2  [4]=SigS12
 //    [5]=nuSigF1  [6]=nuSigF2  [7]=chi1  [8]=chi2
 //
 //  Conditions aux limites :
-//    Bords externes    -> Dirichlet phi=0 (condition de vide)
-//    Cellule VOID      -> phi=0 (pas de flux dans interstice vide)
+//    Bord externe / VOID → Dirichlet phi=0 (vide extrapolé)
 // ============================================================
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-// ping-pong : phi1_in/phi2_in -> phi1_out/phi2_out
 layout(set=0, binding=0) buffer Phi1In  { float phi1_in[];  };
 layout(set=0, binding=1) buffer Phi2In  { float phi2_in[];  };
 layout(set=0, binding=2) buffer Phi1Out { float phi1_out[]; };
 layout(set=0, binding=3) buffer Phi2Out { float phi2_out[]; };
-// Sections efficaces spatiales (9 floats/cellule)
 layout(set=0, binding=4) buffer XSBuf   { float xs_buf[];   };
-// Masque de zone : 0=VOID/EMPTY, 1=FUEL, 2=MODERATOR, 3=REFLECTOR, 4=CONTROL_ROD
 layout(set=0, binding=5) buffer ZoneBuf { int   zone_buf[]; };
 
 layout(set=0, binding=6) uniform NeutronParams {
-    float dt;           // pas de temps (s)
-    float dx;           // pas spatial (cm)
-    float k_eff;        // k_eff courant (mis a jour CPU)
-    float phi0;         // normalisation initiale
-    int   grid_cols;    // nb colonnes
-    int   grid_rows;    // nb lignes
-    int   total2d;      // cols * rows
-    float v1;           // vitesse groupe 1 normalisee
-    float v2;           // vitesse groupe 2 normalisee
-    float T_inlet;      // temperature entree (non utilise ici)
+    float dt;
+    float dx;
+    float k_eff;
+    float phi0;
+    int   grid_cols;
+    int   grid_rows;
+    int   total2d;
+    float v1;
+    float v2;
+    float T_inlet;
     int   _pad[2];
 };
 
-// ---- Acces XS locales ----
-float getD1(int i)      { return xs_buf[i*9 + 0]; }
-float getD2(int i)      { return xs_buf[i*9 + 1]; }
-float getSigR1(int i)   { return xs_buf[i*9 + 2]; }
-float getSigR2(int i)   { return xs_buf[i*9 + 3]; }
-float getSigS12(int i)  { return xs_buf[i*9 + 4]; }
-float getNuSigF1(int i) { return xs_buf[i*9 + 5]; }
-float getNuSigF2(int i) { return xs_buf[i*9 + 6]; }
-float getChi1(int i)    { return xs_buf[i*9 + 7]; }
-float getChi2(int i)    { return xs_buf[i*9 + 8]; }
+// ── Accesseurs XS ───────────────────────────────────────────
+float D1(int i)      { return xs_buf[i*9+0]; }
+float D2(int i)      { return xs_buf[i*9+1]; }
+float SigR1(int i)   { return xs_buf[i*9+2]; }
+float SigR2(int i)   { return xs_buf[i*9+3]; }
+float SigS12(int i)  { return xs_buf[i*9+4]; }
+float nuSigF1(int i) { return xs_buf[i*9+5]; }
+float nuSigF2(int i) { return xs_buf[i*9+6]; }
+float chi1(int i)    { return xs_buf[i*9+7]; }
+float chi2(int i)    { return xs_buf[i*9+8]; }
 
-int idx2d(int x, int z) { return z * grid_cols + x; }
+int cell(int x, int z) { return z * grid_cols + x; }
 
-// Flux avec condition limite : 0 hors domaine ou cellule vide
-float getPhi(float buf[], int x, int z) {
-    if (x < 0 || x >= grid_cols || z < 0 || z >= grid_rows) return 0.0;
-    int i = idx2d(x, z);
-    if (zone_buf[i] == 0) return 0.0;  // VOID -> phi=0
-    return buf[i];
+// Flux avec Dirichlet aux bords et cellules vides
+float phi1nb(int x, int z) {
+    if (x<0||x>=grid_cols||z<0||z>=grid_rows) return 0.0;
+    int i=cell(x,z); if(zone_buf[i]==0) return 0.0;
+    return phi1_in[i];
+}
+float phi2nb(int x, int z) {
+    if (x<0||x>=grid_cols||z<0||z>=grid_rows) return 0.0;
+    int i=cell(x,z); if(zone_buf[i]==0) return 0.0;
+    return phi2_in[i];
 }
 
-// ---- Laplacien avec D heterogene (moyenne harmonique aux interfaces) ----
-// Assure la continuite du courant J = -D * grad(phi) aux interfaces
-float laplacian_het(float buf[], int x, int z, float D_c, int field_D) {
-    float phi_c  = buf[idx2d(x, z)];
-
-    // Coordonnees voisins
-    int ixp = (x+1 < grid_cols) ? idx2d(x+1,z) : -1;
-    int ixm = (x-1 >= 0)        ? idx2d(x-1,z) : -1;
-    int izp = (z+1 < grid_rows) ? idx2d(x,z+1) : -1;
-    int izm = (z-1 >= 0)        ? idx2d(x,z-1) : -1;
-
-    // D voisins (0 si hors domaine)
-    float Dxp = (ixp >= 0) ? xs_buf[ixp*9 + field_D] : 0.0;
-    float Dxm = (ixm >= 0) ? xs_buf[ixm*9 + field_D] : 0.0;
-    float Dzp = (izp >= 0) ? xs_buf[izp*9 + field_D] : 0.0;
-    float Dzm = (izm >= 0) ? xs_buf[izm*9 + field_D] : 0.0;
-
-    // Flux voisins
-    float phi_xp = getPhi(buf, x+1, z);
-    float phi_xm = getPhi(buf, x-1, z);
-    float phi_zp = getPhi(buf, x,   z+1);
-    float phi_zm = getPhi(buf, x,   z-1);
-
-    // D interfacial = moyenne harmonique : D_i+1/2 = 2*Dc*Dn/(Dc+Dn)
-    // Si Dn=0 (bord ou vide) -> courant nul = condition Dirichlet effective
-    float eps = 1e-6;
-    float Dxp_int = (Dxp > eps) ? (2.0*D_c*Dxp)/(D_c+Dxp) : 0.0;
-    float Dxm_int = (Dxm > eps) ? (2.0*D_c*Dxm)/(D_c+Dxm) : 0.0;
-    float Dzp_int = (Dzp > eps) ? (2.0*D_c*Dzp)/(D_c+Dzp) : 0.0;
-    float Dzm_int = (Dzm > eps) ? (2.0*D_c*Dzm)/(D_c+Dzm) : 0.0;
-
-    float dx2 = dx * dx;
-    return (Dxp_int*(phi_xp - phi_c) + Dxm_int*(phi_xm - phi_c)
-          + Dzp_int*(phi_zp - phi_c) + Dzm_int*(phi_zm - phi_c)) / dx2;
+// ── Laplacien hétérogène 5 points ───────────────────────────
+// D interfacial = moyenne harmonique 2·Dc·Dn/(Dc+Dn)
+// Si Dn=0 → courant nul → Dirichlet implicite
+float lap1(int x, int z, float Dc) {
+    float pc = phi1_in[cell(x,z)];
+    float dx2 = dx*dx; float L = 0.0; float eps = 1e-6;
+    int nb[4][2] = {{x+1,z},{x-1,z},{x,z+1},{x,z-1}};
+    for (int d=0; d<4; d++) {
+        int nx=nb[d][0], nz=nb[d][1];
+        bool inside = nx>=0&&nx<grid_cols&&nz>=0&&nz<grid_rows;
+        float Dn = inside ? D1(cell(nx,nz)) : 0.0;
+        float De = (Dn>eps) ? 2.0*Dc*Dn/(Dc+Dn) : 0.0;
+        L += De*(phi1nb(nx,nz)-pc);
+    }
+    return L/dx2;
+}
+float lap2(int x, int z, float Dc) {
+    float pc = phi2_in[cell(x,z)];
+    float dx2 = dx*dx; float L = 0.0; float eps = 1e-6;
+    int nb[4][2] = {{x+1,z},{x-1,z},{x,z+1},{x,z-1}};
+    for (int d=0; d<4; d++) {
+        int nx=nb[d][0], nz=nb[d][1];
+        bool inside = nx>=0&&nx<grid_cols&&nz>=0&&nz<grid_rows;
+        float Dn = inside ? D2(cell(nx,nz)) : 0.0;
+        float De = (Dn>eps) ? 2.0*Dc*Dn/(Dc+Dn) : 0.0;
+        L += De*(phi2nb(nx,nz)-pc);
+    }
+    return L/dx2;
 }
 
 void main() {
     int x = int(gl_GlobalInvocationID.x);
     int z = int(gl_GlobalInvocationID.y);
-    if (x >= grid_cols || z >= grid_rows) return;
+    if (x>=grid_cols || z>=grid_rows) return;
+    int i = cell(x,z);
 
-    int i = idx2d(x, z);
+    if (zone_buf[i]==0) { phi1_out[i]=0.0; phi2_out[i]=0.0; return; }
 
-    // Zone vide -> flux nul
-    if (zone_buf[i] == 0) {
-        phi1_out[i] = 0.0;
-        phi2_out[i] = 0.0;
-        return;
-    }
+    float p1 = phi1_in[i];
+    float p2 = phi2_in[i];
 
-    // Lecture XS locales
-    float D1     = getD1(i);
-    float D2     = getD2(i);
-    float SigR1  = getSigR1(i);
-    float SigR2  = getSigR2(i);
-    float SigS12 = getSigS12(i);
-    float nuSF1  = getNuSigF1(i);
-    float nuSF2  = getNuSigF2(i);
-    float chi1   = getChi1(i);
-    float chi2   = getChi2(i);
+    float dc1  = D1(i),    dc2  = D2(i);
+    float sr1  = SigR1(i), sr2  = SigR2(i);
+    float ss12 = SigS12(i);
+    float c1   = chi1(i),  c2   = chi2(i);
 
-    float phi1 = phi1_in[i];
-    float phi2 = phi2_in[i];
+    float k     = max(k_eff, 0.01);
+    float Fsrc  = (nuSigF1(i)*p1 + nuSigF2(i)*p2) / k;
 
-    // Source de fission totale normalisee par k_eff
-    float k = max(k_eff, 0.01);
-    float fission_src = (nuSF1 * phi1 + nuSF2 * phi2) / k;
+    float L1   = lap1(x, z, dc1);
+    float L2   = lap2(x, z, dc2);
 
-    // ---- Groupe 1 : rapide ----
-    float lap1  = laplacian_het(phi1_in, x, z, D1, 0);
-    // Note : SigR1 inclut deja SigS12 (retrait = absorption + ralentissement)
-    float dphi1 = dt * v1 * (lap1 - SigR1 * phi1 + chi1 * fission_src);
-    float phi1_new = max(0.0, phi1 + dphi1);
+    // ── Schéma semi-implicite ────────────────────────────────
+    // phi^(n+1) = [phi^n + dt·v·(L + src)] / (1 + dt·v·SigR)
+    float src1 = c1 * Fsrc;
+    float src2 = c2 * Fsrc + ss12 * p1;
 
-    // ---- Groupe 2 : thermique (recoit les neutrons ralentis du groupe 1) ----
-    float lap2  = laplacian_het(phi2_in, x, z, D2, 1);
-    // SigS12*phi1 = gain par ralentissement depuis groupe 1
-    float dphi2 = dt * v2 * (lap2 - SigR2 * phi2 + SigS12 * phi1 + chi2 * fission_src);
-    float phi2_new = max(0.0, phi2 + dphi2);
-
-    phi1_out[i] = phi1_new;
-    phi2_out[i] = phi2_new;
+    phi1_out[i] = max(0.0, (p1 + dt*v1*(L1+src1)) / (1.0+dt*v1*sr1));
+    phi2_out[i] = max(0.0, (p2 + dt*v2*(L2+src2)) / (1.0+dt*v2*sr2));
 }

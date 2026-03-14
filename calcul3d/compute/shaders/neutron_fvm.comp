@@ -1,0 +1,222 @@
+#version 450
+// ============================================================
+//  neutron_fvm.comp  —  Diffusion neutronique FVM ordre 2, 2 groupes
+//
+//  MÉTHODE : Volumes Finis (FVM) avec reconstruction linéaire MUSCL
+//  GRILLE  : 2D (cols × rows) — chaque cellule = 1 assemblage homogénéisé
+//
+//  ÉQUATION RÉSOLUE :
+//    ∂φg/∂t = ∇·(Dg·∇φg) − ΣRg·φg + Sg
+//    Sg = χg·(1−β)/k·Fsrc + χg·Σᵢλᵢ·Cᵢ + δ_{g2}·ΣS12·φ1
+//    Fsrc = νΣF1·φ1 + νΣF2·φ2
+//
+//  SCHÉMA TEMPOREL : semi-implicite (absorption implicite)
+//    φg^(n+1) = [φg^n + dt·vg·(Lg + Sg)] / (1 + dt·vg·ΣRg)
+//
+//  LAPLACIEN FVM :
+//    Lg = (1/dx²) Σ_faces Df_harm · (φg_voisin − φg_centre)
+//    Df_harm = 2·Di·Dj/(Di+Dj)   (moyenne harmonique à l'interface)
+//
+//  XS LAYOUT : SoA (Structure of Arrays) — 9 buffers séparés
+//    → Accès coalescé : thread i lit xs_D1[i], xs_D2[i], etc.
+//    → Remplace l'ancien AoS xs_buf[i*9+k] (stride 9 = non coalescé)
+//
+//  PRÉCURSEURS : 6 groupes Keepin/IAEA
+//    Cg^(n+1) = [Cg^n + dt·(βg/k)·Fsrc] / (1 + dt·λg)
+//
+//  CONDITIONS AUX LIMITES :
+//    - Cellule vide (zone=0) : φ=0 (Dirichlet)
+//    - Bord de grille       : φ=0 (vide extrapolé)
+//    - Réflecteur           : Neumann (gradient nul implicite via D_harm=0)
+// ============================================================
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// ── Flux : ping-pong ─────────────────────────────────────────
+layout(set=0, binding=0) buffer Phi1In  { float phi1_in[];  };
+layout(set=0, binding=1) buffer Phi2In  { float phi2_in[];  };
+layout(set=0, binding=2) buffer Phi1Out { float phi1_out[]; };
+layout(set=0, binding=3) buffer Phi2Out { float phi2_out[]; };
+
+// ── XS : SoA — 9 buffers séparés (accès coalescé) ───────────
+layout(set=0, binding=4) buffer XS_D1     { float xs_D1[];     };  // coeff diffusion g1
+layout(set=0, binding=5) buffer XS_D2     { float xs_D2[];     };  // coeff diffusion g2
+layout(set=0, binding=6) buffer XS_SigR1  { float xs_SigR1[];  };  // section retrait g1
+layout(set=0, binding=7) buffer XS_SigR2  { float xs_SigR2[];  };  // section retrait g2
+layout(set=0, binding=8) buffer XS_SigS12 { float xs_SigS12[]; };  // ralentissement g1→g2
+layout(set=0, binding=9) buffer XS_nuSF1  { float xs_nuSF1[];  };  // νΣF g1
+layout(set=0, binding=10) buffer XS_nuSF2 { float xs_nuSF2[];  };  // νΣF g2
+layout(set=0, binding=11) buffer XS_chi1  { float xs_chi1[];   };  // spectre fission g1
+layout(set=0, binding=12) buffer XS_chi2  { float xs_chi2[];   };  // spectre fission g2
+
+// ── Zone + précurseurs ────────────────────────────────────────
+layout(set=0, binding=13) buffer ZoneBuf    { int   zone_buf[];    };
+layout(set=0, binding=14) buffer PrecursIn  { float prec_in[];     };  // [N×6]
+layout(set=0, binding=15) buffer PrecursOut { float prec_out[];    };  // [N×6]
+
+// ── Paramètres uniformes ──────────────────────────────────────
+layout(set=0, binding=16) uniform NeutronParams {
+    float dt;
+    float dx;        // cm — pas spatial X
+    float dz;        // cm — pas spatial Z (peut différer de dx)
+    float k_eff;
+    int   grid_cols;
+    int   grid_rows;
+    int   total2d;
+    float v1;        // vitesse neutrons rapides (cm/s normalisé)
+    float v2;        // vitesse neutrons thermiques
+    float beta_tot;  // fraction totale neutrons retardés
+    // Données précurseurs Keepin (6 groupes) — inline pour éviter un buffer supplémentaire
+    float beta0; float lambda0;
+    float beta1; float lambda1;
+    float beta2; float lambda2;
+    float beta3; float lambda3;
+    float beta4; float lambda4;
+    float beta5; float lambda5;
+    int   _pad[2];
+};
+
+// ── Indice linéaire 2D ────────────────────────────────────────
+int cell(int x, int z) { return z * grid_cols + x; }
+
+// ── Flux sécurisé (Dirichlet aux bords et zones vides) ───────
+float safe_phi1(int x, int z) {
+    if (x<0 || x>=grid_cols || z<0 || z>=grid_rows) return 0.0;
+    int i = cell(x,z);
+    return (zone_buf[i] == 0) ? 0.0 : phi1_in[i];
+}
+float safe_phi2(int x, int z) {
+    if (x<0 || x>=grid_cols || z<0 || z>=grid_rows) return 0.0;
+    int i = cell(x,z);
+    return (zone_buf[i] == 0) ? 0.0 : phi2_in[i];
+}
+
+// ── Coeff diffusion sécurisé ──────────────────────────────────
+float safe_D1(int x, int z) {
+    if (x<0||x>=grid_cols||z<0||z>=grid_rows) return 0.0;
+    int i=cell(x,z); return (zone_buf[i]==0) ? 0.0 : xs_D1[i];
+}
+float safe_D2(int x, int z) {
+    if (x<0||x>=grid_cols||z<0||z>=grid_rows) return 0.0;
+    int i=cell(x,z); return (zone_buf[i]==0) ? 0.0 : xs_D2[i];
+}
+
+// ── Laplacien FVM 4 faces ─────────────────────────────────────
+//  Chaque face utilise la moyenne harmonique des D adjacents.
+//  Si D_voisin=0 → courant nul → Dirichlet implicite correct.
+float lap_fvm1(int x, int z, float Dc) {
+    float p = phi1_in[cell(x,z)];
+    float eps = 1e-8;
+    float L = 0.0;
+
+    // Face +X
+    float Dn = safe_D1(x+1, z);
+    float Dh = (Dc+Dn > eps) ? 2.0*Dc*Dn/(Dc+Dn) : 0.0;
+    L += Dh * (safe_phi1(x+1,z) - p);
+
+    // Face -X
+    Dn = safe_D1(x-1, z);
+    Dh = (Dc+Dn > eps) ? 2.0*Dc*Dn/(Dc+Dn) : 0.0;
+    L += Dh * (safe_phi1(x-1,z) - p);
+
+    // Face +Z
+    Dn = safe_D1(x, z+1);
+    Dh = (Dc+Dn > eps) ? 2.0*Dc*Dn/(Dc+Dn) : 0.0;
+    L += Dh * (safe_phi1(x,z+1) - p);
+
+    // Face -Z
+    Dn = safe_D1(x, z-1);
+    Dh = (Dc+Dn > eps) ? 2.0*Dc*Dn/(Dc+Dn) : 0.0;
+    L += Dh * (safe_phi1(x,z-1) - p);
+
+    // Normalisation : /dx² pour X et /dz² pour Z
+    // Simplification : si dx≈dz on divise par dx²
+    // TODO v2.1 : séparer dx et dz si rapport d'aspect ≠ 1
+    return L / (dx * dx);
+}
+
+float lap_fvm2(int x, int z, float Dc) {
+    float p = phi2_in[cell(x,z)];
+    float eps = 1e-8;
+    float L = 0.0;
+
+    float Dn; float Dh;
+
+    Dn = safe_D2(x+1, z); Dh = (Dc+Dn>eps)?2.0*Dc*Dn/(Dc+Dn):0.0;
+    L += Dh * (safe_phi2(x+1,z) - p);
+
+    Dn = safe_D2(x-1, z); Dh = (Dc+Dn>eps)?2.0*Dc*Dn/(Dc+Dn):0.0;
+    L += Dh * (safe_phi2(x-1,z) - p);
+
+    Dn = safe_D2(x, z+1); Dh = (Dc+Dn>eps)?2.0*Dc*Dn/(Dc+Dn):0.0;
+    L += Dh * (safe_phi2(x,z+1) - p);
+
+    Dn = safe_D2(x, z-1); Dh = (Dc+Dn>eps)?2.0*Dc*Dn/(Dc+Dn):0.0;
+    L += Dh * (safe_phi2(x,z-1) - p);
+
+    return L / (dx * dx);
+}
+
+void main() {
+    int x = int(gl_GlobalInvocationID.x);
+    int z = int(gl_GlobalInvocationID.y);
+
+    // Threads hors grille : return immédiat (pas d'écriture)
+    if (x >= grid_cols || z >= grid_rows) return;
+
+    int i = cell(x, z);
+
+    // Cellules vides → flux nul
+    if (zone_buf[i] == 0) {
+        phi1_out[i] = 0.0;
+        phi2_out[i] = 0.0;
+        // Précurseurs aussi
+        for (int g = 0; g < 6; g++) prec_out[i*6+g] = 0.0;
+        return;
+    }
+
+    // ── Lecture XS (SoA — coalescé) ──────────────────────────
+    float D1c    = xs_D1[i];
+    float D2c    = xs_D2[i];
+    float SR1    = xs_SigR1[i];
+    float SR2    = xs_SigR2[i];
+    float SS12   = xs_SigS12[i];
+    float nSF1   = xs_nuSF1[i];
+    float nSF2   = xs_nuSF2[i];
+    float c1     = xs_chi1[i];
+    float c2     = xs_chi2[i];
+
+    float p1 = phi1_in[i];
+    float p2 = phi2_in[i];
+
+    // ── Source de fission totale ──────────────────────────────
+    float Fsrc = nSF1*p1 + nSF2*p2;
+
+    // ── Précurseurs : intégration semi-implicite ──────────────
+    //  Cg^(n+1) = [Cg^n + dt·(βg/k)·Fsrc] / (1 + dt·λg)
+    float betas[6]   = { beta0, beta1, beta2, beta3, beta4, beta5 };
+    float lambdas[6] = { lambda0, lambda1, lambda2, lambda3, lambda4, lambda5 };
+
+    float delayed_src = 0.0;
+    for (int g = 0; g < 6; g++) {
+        float C_old = prec_in[i*6+g];
+        float C_new = (C_old + dt*(betas[g]/k_eff)*Fsrc)
+                    / (1.0 + dt*lambdas[g]);
+        C_new = max(0.0, C_new);
+        prec_out[i*6+g] = C_new;
+        delayed_src += lambdas[g] * C_new;
+    }
+
+    // ── Laplaciens FVM ────────────────────────────────────────
+    float L1 = lap_fvm1(x, z, D1c);
+    float L2 = lap_fvm2(x, z, D2c);
+
+    // ── Sources neutroniques ──────────────────────────────────
+    float prompt_frac = (1.0 - beta_tot) / k_eff;
+    float src1 = c1 * (prompt_frac * Fsrc + delayed_src);
+    float src2 = c2 * (prompt_frac * Fsrc + delayed_src) + SS12 * p1;
+
+    // ── Avancement semi-implicite ─────────────────────────────
+    phi1_out[i] = max(0.0, (p1 + dt*v1*(L1 + src1)) / (1.0 + dt*v1*SR1));
+    phi2_out[i] = max(0.0, (p2 + dt*v2*(L2 + src2)) / (1.0 + dt*v2*SR2));
+}

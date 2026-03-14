@@ -1,23 +1,29 @@
 #pragma once
 // ============================================================
-//  SimPanel.hpp
-//  Panneau de contrôle de la simulation thermique
+//  SimPanel.hpp — Panneau simulation + courbes transitoires
 //  Touche S : ouvrir/fermer
-//  Corrections :
-//    - Bug "déjà convergé à t=0" : convergence reset propre
-//      lors du changement de tranches (slicesChanged)
-//    - Section "Mode flux" : affiche GPU Diffusion 2G si dispo
-//    - Divergence 16/32 : info dt affiché pour debug
 // ============================================================
 #include <raylib.h>
 #include <cstdio>
 #include <cmath>
 #include <cstring>
 #include <string>
+#include <vector>
+#include <functional>
 #include "../physics/NeutronFlux.hpp"
 
 enum class SimMode  { ACCELERE, TEMPS_REEL };
 enum class SimState { STOPPED, RUNNING, PAUSED };
+
+// Point d'historique transitoire (partagé main ↔ SimPanel)
+struct TransientPoint {
+    float t;
+    float k_eff;
+    float reactivity;  // Δk/k
+    float power_rel;   // puissance relative
+    float T_max;
+    float T_avg;
+};
 
 struct SimControl {
     SimMode  mode     = SimMode::ACCELERE;
@@ -56,7 +62,12 @@ struct SimPanel {
     }
 
     // gpuFluxActive : true si NeutronCompute GPU est disponible
-    bool update(SimControl& ctrl, int sw, int sh, bool neutronAvail = false, bool gpuFluxActive = false) {
+    bool update(SimControl& ctrl, int sw, int sh,
+                bool neutronAvail = false,
+                bool gpuFluxActive = false,
+                const std::vector<TransientPoint>& history = {},
+                float reactivity_dk = 0.0f,
+                float power_rel = 1.0f) {
         if (IsKeyPressed(KEY_S)) { visible = !visible; inputFocus = false; }
         if (!visible) return false;
 
@@ -304,8 +315,98 @@ struct SimPanel {
             ctrl.state == SimState::PAUSED  ? Color{255,200,50,255}  : Color{180,80,80,255};
         int stw = MeasureText(stateStr, 13);
         DrawText(stateStr, PX+PW/2-stw/2, y, 13, stateCol);
+        y += 22;
 
-        Rectangle panelRect = {(float)PX,(float)PY,(float)PW,(float)PH};
+        // ── Métriques transitoires en temps réel ─────────────
+        DrawRectangle(PX+10, y, PW-20, 52, {15,15,35,220});
+        DrawRectangleLines(PX+10, y, PW-20, 52, {60,60,100,255});
+        {
+            char mb[80];
+            // Réactivité en pcm (1 pcm = 1e-5 Δk/k)
+            float rho_pcm = reactivity_dk * 1e5f;
+            Color rc = (fabsf(rho_pcm) < 50.f)  ? Color{100,255,100,255}  // critique ±50 pcm
+                     : (rho_pcm > 0)             ? Color{255,120,60,255}   // sur-critique
+                                                 : Color{80,160,255,255};  // sous-critique
+            snprintf(mb, sizeof(mb), "Reactivite : %+.0f pcm", rho_pcm);
+            DrawText(mb, PX+18, y+5, 12, rc);
+            snprintf(mb, sizeof(mb), "Puissance  : %.3f P/P0", power_rel);
+            Color pc = (power_rel > 1.05f) ? Color{255,160,60,255}
+                     : (power_rel < 0.95f) ? Color{80,160,255,255}
+                                           : Color{100,255,100,255};
+            DrawText(mb, PX+18, y+21, 12, pc);
+            snprintf(mb, sizeof(mb), "t = %.1f s", ctrl.simTime);
+            DrawText(mb, PX+18, y+37, 11, {140,140,180,255});
+        }
+        y += 58;
+
+        // ── Mini-graphes transitoires ─────────────────────────
+        if (!history.empty()) {
+            const int GW = PW-20, GH = 55;
+            const int GX = PX+10;
+
+            // Fonction utilitaire de tracé d'une courbe
+            auto drawCurve = [&](int gy, const char* label,
+                                 float vmin, float vmax,
+                                 Color col, Color bgcol,
+                                 std::function<float(const TransientPoint&)> getter)
+            {
+                DrawRectangle(GX, gy, GW, GH, bgcol);
+                DrawRectangleLines(GX, gy, GW, GH, {60,60,90,255});
+                DrawText(label, GX+4, gy+3, 10, {160,160,200,255});
+
+                // Ligne de référence
+                if (vmin < 1.0f && 1.0f < vmax) {
+                    float ry = gy + GH - (1.0f-vmin)/(vmax-vmin)*GH;
+                    DrawLine(GX, (int)ry, GX+GW, (int)ry, {60,60,60,180});
+                }
+
+                // Courbe
+                int N = (int)history.size();
+                int maxPts = GW;
+                int step   = fmaxf(1, N/maxPts);
+                Vector2 prev = {-1,-1};
+                for (int ii=0; ii<N; ii+=step) {
+                    float v = getter(history[ii]);
+                    float t_norm = (float)ii / (float)(N-1);
+                    float v_norm = (vmax>vmin) ? (v-vmin)/(vmax-vmin) : 0.5f;
+                    v_norm = fmaxf(0.f, fminf(1.f, v_norm));
+                    Vector2 pt = {(float)(GX + t_norm*GW),
+                                  (float)(gy + GH - v_norm*GH)};
+                    if (prev.x >= 0)
+                        DrawLineEx(prev, pt, 1.5f, col);
+                    prev = pt;
+                }
+                // Valeur courante
+                char vb[32];
+                float vlast = getter(history.back());
+                snprintf(vb, sizeof(vb), "%.4g", vlast);
+                DrawText(vb, GX+GW-50, gy+3, 10, col);
+            };
+
+            // Bornes dynamiques sur l'historique
+            float kmin=1e9f, kmax=-1e9f, pmin=1e9f, pmax=-1e9f, tmin=1e9f, tmax=-1e9f;
+            for (const auto& p : history) {
+                kmin=fminf(kmin,p.k_eff);    kmax=fmaxf(kmax,p.k_eff);
+                pmin=fminf(pmin,p.power_rel); pmax=fmaxf(pmax,p.power_rel);
+                tmin=fminf(tmin,p.T_max);     tmax=fmaxf(tmax,p.T_max);
+            }
+            float margin = 0.02f;
+            kmin-=(kmax-kmin)*margin+1e-4f; kmax+=(kmax-kmin)*margin+1e-4f;
+            pmin-=(pmax-pmin)*margin+1e-4f; pmax+=(pmax-pmin)*margin+1e-4f;
+            tmin-=(tmax-tmin)*margin+1.f;   tmax+=(tmax-tmin)*margin+1.f;
+
+            drawCurve(y,    "k_eff",   kmin, kmax, {100,255,100,255}, {10,25,10,220},
+                      [](const TransientPoint& p){ return p.k_eff; });
+            y += GH+4;
+            drawCurve(y,    "P/P0",    pmin, pmax, {255,160,60,255},  {25,15,5,220},
+                      [](const TransientPoint& p){ return p.power_rel; });
+            y += GH+4;
+            drawCurve(y,    "T_max°C", tmin, tmax, {255,80,80,255},   {25,5,5,220},
+                      [](const TransientPoint& p){ return p.T_max; });
+            y += GH+4;
+        }
+
+        Rectangle panelRect = {(float)PX,(float)PY,(float)PW,(float)(y+10)};
         if (clicked && !CheckCollisionPointRec(mouse, panelRect)) visible = false;
         return changed;
     }
