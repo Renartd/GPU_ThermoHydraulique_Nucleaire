@@ -28,7 +28,8 @@ struct TransientPoint {
 struct SimControl {
     SimMode  mode     = SimMode::ACCELERE;
     SimState state    = SimState::STOPPED;
-    FluxMode fluxMode = FluxMode::DIFFUSION_2G;  // modèle par défaut
+    FluxMode fluxMode = FluxMode::DIFFUSION_2G;
+    bool resetRequested = false;  // true quand bouton Reset cliqué
 
     float speedFactor   = 1.0f;
     float simTime       = 0.0f;
@@ -301,7 +302,10 @@ struct SimPanel {
             DrawText(btns[i].label, (int)btn.x+8, (int)btn.y+7, 13, WHITE);
             if (clicked && hover) {
                 ctrl.state = btns[i].tgt;
-                if (ctrl.state == SimState::STOPPED) ctrl.simTime = 0.0f;
+                if (ctrl.state == SimState::STOPPED) {
+                    ctrl.simTime = 0.0f;
+                    ctrl.resetRequested = true;  // signal reset complet
+                }
                 changed = true;
             }
         }

@@ -455,8 +455,12 @@ int main() {
             }
         }
 
-        // ── Reset ────────────────────────────────────────────
-        if (simCtrl.state == SimState::STOPPED && !needReset) needReset = true;
+        // ── Reset ─────────────────────────────────────────────
+        // Déclenché UNIQUEMENT par le bouton Reset du SimPanel
+        if (simCtrl.resetRequested) {
+            needReset = true;
+            simCtrl.resetRequested = false;
+        }
 
         if (needReset && simCtrl.state == SimState::STOPPED
             && thermalAvailable)
@@ -628,56 +632,60 @@ int main() {
 
         // ── Panneau "Modèle actif" — coin haut-droite ─────────
         {
-            const int PW = 240, PX = SW - PW - 6, PY = 6;
+            const int PW = 255, PX = SW - PW - 6, PY = 6;
             int py = PY + 6;
-            DrawRectangle(PX-4, PY, PW, 130, {5,8,20,220});
-            DrawRectangleLines(PX-4, PY, PW, 130, {60,80,140,200});
+            DrawRectangle(PX-4, PY, PW, 195, {5,8,20,230});
+            DrawRectangleLines(PX-4, PY, PW, 195, {60,80,140,200});
 
-            // Titre
-            DrawText("MODELE ACTIF", PX, py, 11, {120,160,255,255}); py += 16;
+            DrawText("MODELE ACTIF", PX, py, 11, {120,160,255,255}); py += 15;
+            DrawLine(PX-4, PY+20, PX-4+PW, PY+20, {40,60,120,180}); py += 3;
+
+            char buf[90];
 
             // Maillage
-            char buf[80];
-            snprintf(buf, sizeof(buf), "Grille : %dx%dx%d  (hex struct.)",
+            snprintf(buf, sizeof(buf), "Grille : %dx%dx%d  hex struct.",
                      meshConfig.cols, meshConfig.rows, meshConfig.slices);
-            DrawText(buf, PX, py, 10, {160,180,220,200}); py += 13;
-
+            DrawText(buf, PX, py, 10, {160,180,220,200}); py += 12;
             snprintf(buf, sizeof(buf), "h=%.3fm  AR=%.2f  %s",
                      meshConfig.h_target_m, meshConfig.aspect_ratio,
-                     meshConfig.aspectOK() ? "" : "DEGRADE!");
+                     meshConfig.aspectOK() ? "OK" : "DEGRADE!");
             Color ar_col = meshConfig.aspectOK()
-                         ? Color{120,200,120,200} : Color{255,140,40,255};
-            DrawText(buf, PX, py, 10, ar_col); py += 14;
+                ? Color{120,200,120,200} : Color{255,140,40,255};
+            DrawText(buf, PX, py, 10, ar_col); py += 15;
 
-            // Neutronique
-            const char* neutron_model = neutronAvailable
-                ? (neutronCompute.gpuAccel
-                    ? "FVM 2G  XS-SoA  GPU Vulkan"
-                    : "FVM 2G  XS-SoA  CPU")
-                : "Cosinus REP (fallback)";
-            Color n_col = neutronAvailable
-                ? (neutronCompute.gpuAccel
-                    ? Color{80,255,120,255}
-                    : Color{200,220,100,255})
-                : Color{180,120,60,255};
-            DrawText("Neutronique :", PX, py, 10, {160,180,220,200}); py += 13;
-            DrawText(neutron_model, PX+4, py, 10, n_col); py += 13;
+            // ── Tableau GPU/CPU par phénomène ─────────────────
+            DrawText("Phenomene", PX,     py, 10, {120,140,180,220});
+            DrawText("Calcul",    PX+152, py, 10, {120,140,180,220});
+            py += 12;
+            DrawLine(PX-4, py, PX-4+PW, py, {30,50,100,150}); py += 4;
 
-            // Thermique
-            const char* therm_model = thermalAvailable
-                ? "Diffusion 3D  GPU Vulkan"
-                : "Indisponible";
-            Color t_col = thermalAvailable
-                ? Color{80,220,255,255} : Color{180,80,80,255};
-            DrawText("Thermique :", PX, py, 10, {160,180,220,200}); py += 13;
-            DrawText(therm_model, PX+4, py, 10, t_col); py += 13;
+            auto row = [&](const char* label, bool onGPU, bool active){
+                Color lc = active ? Color{200,210,230,255} : Color{80,90,100,180};
+                DrawText(label, PX, py, 10, lc);
+                if (active) {
+                    Color gc = onGPU ? Color{80,255,120,255} : Color{255,200,80,255};
+                    DrawRectangle(PX+148, py-1, onGPU?38:30, 12,
+                        onGPU ? Color{20,60,20,180} : Color{60,50,10,180});
+                    DrawText(onGPU ? "GPU" : "CPU", PX+152, py, 10, gc);
+                } else {
+                    DrawText("--", PX+152, py, 10, {60,70,80,180});
+                }
+                py += 13;
+            };
 
-            // Précurseurs + Xénon
-            DrawText("Précurseurs : 6G Keepin  Xe-I spatiaux",
-                     PX, py, 10, {140,160,200,180}); py += 13;
+            bool gpuNeutron = neutronAvailable && neutronCompute.gpuAccel;
+            bool simRunning = (simCtrl.state == SimState::RUNNING);
 
-            // Touche D
-            DrawText("[D] Configurer le maillage", PX, py, 10, {80,120,200,200});
+            row("Diffusion thermique 3D",  true,        thermalAvailable);
+            row("Diffusion neutronique 2G", gpuNeutron, neutronAvailable);
+            row("Sections efficaces XS",   false,       neutronAvailable);
+            row("Precurseurs 6G (Keepin)", false,       neutronAvailable);
+            row("Xenon-135 / Iode-135",    false,       neutronAvailable && neutronCompute.xenonActive);
+            row("Caloporteur 1D",          false,       coolantPanel.active);
+
+            py += 2;
+            DrawLine(PX-4, py, PX-4+PW, py, {30,50,100,150}); py += 5;
+            DrawText("[D] Maillage  [X] Xenon", PX, py, 10, {80,110,180,200});
         }
 
         // ── Barre de commandes ────────────────────────────────
