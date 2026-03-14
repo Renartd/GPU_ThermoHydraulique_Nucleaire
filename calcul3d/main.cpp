@@ -142,7 +142,8 @@ static void reinitSimulation(
 
     std::cout << "[reinit] Maillage " << mc.cols << "x"
               << mc.rows << "x" << mc.slices
-              << "  h=" << mc.h_target_m << "m"
+              << "  sub_xy=" << mc.sub_xy
+              << "  sub_z="  << mc.sub_z
               << "  neutron=" << neutronAvail
               << "  thermal=" << thermalAvail << "\n";
 }
@@ -183,19 +184,21 @@ int main() {
         }
     std::cout << "[Main] " << grid.cubes.size() << " assemblages\n";
 
-    // ── [Mesh1] Initialisation MeshConfig depuis la grille chargée ──
-    // La dimension d'un assemblage REP standard = 0.214m × 4.0m × 0.214m
-    // On calcule les dimensions du cœur depuis le nombre d'assemblages
+    // ── [Mesh1] Initialisation MeshConfig ────────────────────
     MeshConfig meshConfig;
     {
-        float assy_pitch = grid.dims.width + grid.dims.spacing;  // ≈ 0.22m
-        meshConfig.core_width_m  = grid.cols * assy_pitch;
-        meshConfig.core_depth_m  = grid.rows * assy_pitch;
-        meshConfig.core_height_m = grid.dims.height;
-        meshConfig.h_target_m    = assy_pitch;  // 1 cellule = 1 assemblage
+        meshConfig.assy_pitch_m  = grid.dims.width + grid.dims.spacing;
+        meshConfig.assy_height_m = grid.dims.height;
+        meshConfig.n_assy_cols   = grid.cols;
+        meshConfig.n_assy_rows   = grid.rows;
+        // Par défaut : 8×8 subdivisions par assemblage en XZ
+        // sub_z calculé pour avoir des cubes aussi réguliers que possible
+        meshConfig.sub_xy        = 8;
+        int approx_sub_z = std::max(1, (int)std::round(
+            (meshConfig.assy_height_m / meshConfig.assy_pitch_m) * meshConfig.sub_xy));
+        meshConfig.sub_z         = approx_sub_z;
         meshConfig.update();
 
-        // Appliquer au grid
         grid.applyMesh(meshConfig);
         grid.rebuildPositions();
     }
@@ -325,7 +328,7 @@ int main() {
 
     RenderOptions renderOpt;
     renderOpt.cubeSize   = meshConfig.dx;
-    renderOpt.cubeHeight = meshConfig.core_height_m * 0.1f;
+    renderOpt.cubeHeight = meshConfig.core_height_m() * 0.1f;
     renderOpt.colormapMode = true;
 
     // ── [Mesh2] DimsPanel v2 ─────────────────────────────────
@@ -347,7 +350,7 @@ int main() {
                          thermalAvailable, neutronAvailable);
         // Sync rendering
         renderOpt.cubeSize   = meshConfig.dx;
-        renderOpt.cubeHeight = meshConfig.core_height_m * 0.1f;
+        renderOpt.cubeHeight = meshConfig.core_height_m() * 0.1f;
         camera.distance = fmaxf((float)meshConfig.cols,
                                 (float)meshConfig.rows)
                         * meshConfig.dx * 1.5f;
@@ -646,8 +649,9 @@ int main() {
             snprintf(buf, sizeof(buf), "Grille : %dx%dx%d  hex struct.",
                      meshConfig.cols, meshConfig.rows, meshConfig.slices);
             DrawText(buf, PX, py, 10, {160,180,220,200}); py += 12;
-            snprintf(buf, sizeof(buf), "h=%.3fm  AR=%.2f  %s",
-                     meshConfig.h_target_m, meshConfig.aspect_ratio,
+            snprintf(buf, sizeof(buf), "sub_xy=%d  sub_z=%d  AR=%.2f  %s",
+                     meshConfig.sub_xy, meshConfig.sub_z,
+                     meshConfig.aspect_ratio,
                      meshConfig.aspectOK() ? "OK" : "DEGRADE!");
             Color ar_col = meshConfig.aspectOK()
                 ? Color{120,200,120,200} : Color{255,140,40,255};

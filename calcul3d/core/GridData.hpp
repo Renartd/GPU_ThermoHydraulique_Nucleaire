@@ -59,59 +59,92 @@ struct AssemblyDims {
 };
 
 // ---------------------------------------------------------------
-//  MeshConfig : configuration du maillage pilotée par h_target
+//  MeshConfig v2 : subdivision intra-assemblage
 //
-//  L'utilisateur fixe h_target_cm (taille de maille souhaitée).
-//  cols/rows/slices sont DÉDUITS des dimensions physiques.
-//  L'UI affiche le maillage résultant et le rapport d'aspect.
+//  Chaque assemblage (pitch × height × pitch) est découpé en :
+//    sub_xy × sub_xy  cellules dans le plan horizontal
+//    sub_z            cellules dans la direction axiale
+//
+//  → La cellule élémentaire mesure :
+//    dx = assy_pitch  / sub_xy   (m)
+//    dz = assy_pitch  / sub_xy   (m)
+//    dy = assy_height / sub_z    (m)
+//
+//  Maillage total :
+//    cols_total   = n_assy_cols * sub_xy
+//    rows_total   = n_assy_rows * sub_xy
+//    slices_total = sub_z
+//    total3d      = cols_total × rows_total × slices_total
+//
+//  sub_xy peut aller de 1 (1 cellule = 1 assemblage) à 2^16
+//  Le GPU est nécessaire dès sub_xy > ~8 (>50k cellules)
 // ---------------------------------------------------------------
 struct MeshConfig {
-    // ── Dimensions physiques du CŒUR (m) ─────────────────────
-    float core_width_m  = 3.40f;  // largeur totale cœur (ex: REP 900MW ≈ 3.4m)
-    float core_depth_m  = 3.40f;  // profondeur totale
-    float core_height_m = 4.00f;  // hauteur active (axial)
+    // ── Dimensions physiques d'un assemblage (m) ─────────────
+    float assy_pitch_m  = 0.214f;   // largeur/profondeur assemblage + jeu
+    float assy_height_m = 4.00f;    // hauteur active
 
-    // ── Taille de maille cible (m) ───────────────────────────
-    // Exemples :
-    //   0.21 → 1 cellule ≈ 1 assemblage REP (maillage grossier)
-    //   0.10 → sous-assemblage (4 cellules par assemblage)
-    //   0.40 → regroupement 4 assemblages
-    float h_target_m = 0.21f;
+    // ── Nombre d'assemblages dans la grille de chargement ────
+    int n_assy_cols = 11;   // rempli depuis AssemblageLoader
+    int n_assy_rows = 11;
+
+    // ── Subdivisions intra-assemblage (saisie utilisateur) ───
+    int sub_xy = 1;    // divisions en X et Z par assemblage (1..65536)
+    int sub_z  = 8;    // divisions axiales (1..1024)
 
     // ── Calculé automatiquement ───────────────────────────────
-    int cols   = 1;
-    int rows   = 1;
-    int slices = 1;
+    int cols   = 11;   // = n_assy_cols * sub_xy
+    int rows   = 11;   // = n_assy_rows * sub_xy
+    int slices = 8;    // = sub_z
 
-    float dx = 0.21f;   // m — taille réelle cellule en X
-    float dz = 0.21f;   // m — taille réelle cellule en Z
-    float dy = 0.25f;   // m — taille réelle cellule en Y (axial)
+    float dx = 0.214f;  // m — taille cellule en X
+    float dz = 0.214f;  // m — taille cellule en Z
+    float dy = 0.500f;  // m — taille cellule en Y
 
-    float aspect_ratio = 1.0f;   // max(dx/dy, ...) — doit rester < 3
+    float aspect_ratio = 1.0f;
 
-    // ── Mise à jour à partir de h_target ─────────────────────
+    // ── Mise à jour ───────────────────────────────────────────
     void update() {
-        cols   = std::max(1, (int)std::round(core_width_m  / h_target_m));
-        rows   = std::max(1, (int)std::round(core_depth_m  / h_target_m));
-        slices = std::max(1, (int)std::round(core_height_m / h_target_m));
+        sub_xy = std::max(1, sub_xy);
+        sub_z  = std::max(1, sub_z);
 
-        dx = core_width_m  / (float)cols;
-        dz = core_depth_m  / (float)rows;
-        dy = core_height_m / (float)slices;
+        cols   = n_assy_cols * sub_xy;
+        rows   = n_assy_rows * sub_xy;
+        slices = sub_z;
+
+        dx = assy_pitch_m  / (float)sub_xy;
+        dz = assy_pitch_m  / (float)sub_xy;
+        dy = assy_height_m / (float)sub_z;
 
         float mx = std::max({dx/dz, dz/dx, dx/dy, dy/dx, dz/dy, dy/dz});
         aspect_ratio = mx;
     }
 
-    int total2d() const { return cols * rows; }
-    int total3d() const { return cols * rows * slices; }
+    int  total2d() const { return cols * rows; }
+    long long total3d() const { return (long long)cols * rows * slices; }
 
-    bool aspectOK() const { return aspect_ratio < 3.0f; }
+    bool aspectOK()    const { return aspect_ratio < 5.0f; }
+    bool gpuRequired() const { return total3d() > 50000LL; }
 
-    // Préréglages communs
-    void presetAssemblyREP()  { h_target_m = 0.214f; update(); }
-    void presetSubAssembly()  { h_target_m = 0.107f; update(); }
-    void presetCoarse()       { h_target_m = 0.428f; update(); }
+    // Mémoire GPU estimée (Mo)
+    float estimatedMemMB() const {
+        // phi1, phi2, XS×9, zone, precursors×6 = ~18 float buffers
+        return (float)total2d() * 18.0f * 4.0f / (1024.0f*1024.0f)
+             + (float)total3d() * 2.0f  * 4.0f / (1024.0f*1024.0f);
+    }
+
+    // Dimensions physiques du cœur
+    float core_width_m()  const { return n_assy_cols * assy_pitch_m; }
+    float core_depth_m()  const { return n_assy_rows * assy_pitch_m; }
+    float core_height_m() const { return assy_height_m; }
+
+    // Préréglages
+    void preset1x()  { sub_xy=1;   sub_z=8;   update(); }  // 1 cellule/assy
+    void preset2x()  { sub_xy=2;   sub_z=16;  update(); }  // 4 cellules/assy
+    void preset4x()  { sub_xy=4;   sub_z=32;  update(); }  // 16 cellules/assy
+    void preset8x()  { sub_xy=8;   sub_z=64;  update(); }  // 64 cellules/assy
+    void preset16x() { sub_xy=16;  sub_z=128; update(); }  // GPU requis
+    void preset32x() { sub_xy=32;  sub_z=256; update(); }  // GPU requis
 };
 
 // ---------------------------------------------------------------
@@ -141,22 +174,25 @@ struct GridData {
     float tempMin = 280.0f, tempMax = 320.0f;
 
     // ── Application d'une MeshConfig ─────────────────────────
+    // Le rendu reste à l'échelle assemblage (1 cube = 1 assemblage).
+    // La physique (neutronique/thermique) utilise la grille subdivisée.
     void applyMesh(const MeshConfig& mc) {
-        cols   = mc.cols;
-        rows   = mc.rows;
-        slices = mc.slices;
+        // Grille physique (subdivisée)
+        cols   = mc.cols;    // = n_assy_cols * sub_xy
+        rows   = mc.rows;    // = n_assy_rows * sub_xy
+        slices = mc.slices;  // = sub_z
         dx_m   = mc.dx;
         dy_m   = mc.dy;
         dz_m   = mc.dz;
-        core_width_m  = mc.core_width_m;
-        core_height_m = mc.core_height_m;
-        core_depth_m  = mc.core_depth_m;
+        core_width_m  = mc.core_width_m();
+        core_height_m = mc.core_height_m();
+        core_depth_m  = mc.core_depth_m();
 
-        // Synchroniser AssemblyDims (utilisé par le rendu)
-        dims.width   = mc.dx;
-        dims.height  = mc.core_height_m;
-        dims.depth   = mc.dz;
-        dims.spacing = 0.002f;  // jeu visuel minimal
+        // Dimensions rendu = pitch assemblage (inchangé)
+        dims.width   = mc.assy_pitch_m;
+        dims.height  = mc.assy_height_m;
+        dims.depth   = mc.assy_pitch_m;
+        dims.spacing = 0.002f;
     }
 
     // ── Totaux ───────────────────────────────────────────────
@@ -191,16 +227,25 @@ struct GridData {
     // ── Reconstruction des positions 3D des cubes ─────────────
     //    Utilise dx_m / dz_m réels (plus la supposition width+spacing)
     void rebuildPositions() {
-        offsetX = cols * dx_m * 0.5f - dx_m * 0.5f;
-        offsetZ = rows * dz_m * 0.5f - dz_m * 0.5f;
+        // Les cubes sont positionnés à l'échelle ASSEMBLAGE
+        // (dims.width = assy_pitch, indépendant de la subdivision physique)
+        float step = dims.width + dims.spacing;
+        int n_cols = 0, n_rows = 0;
+        for (const auto& c : cubes) {
+            n_cols = std::max(n_cols, c.col_idx + 1);
+            n_rows = std::max(n_rows, c.row     + 1);
+        }
+        offsetX = n_cols * step * 0.5f - step * 0.5f;
+        offsetZ = n_rows * step * 0.5f - step * 0.5f;
         for (auto& cube : cubes) {
-            cube.pos.x = cube.col_idx * dx_m - offsetX;
-            cube.pos.z = cube.row     * dz_m - offsetZ;
+            cube.pos.x = cube.col_idx * step - offsetX;
+            cube.pos.z = cube.row     * step - offsetZ;
         }
     }
 
     Vector3 cellPos(int row_, int col_) const {
-        return { col_ * dx_m - offsetX, 0.0f, row_ * dz_m - offsetZ };
+        float step = dims.width + dims.spacing;
+        return { col_ * step - offsetX, 0.0f, row_ * step - offsetZ };
     }
 
     bool isFuel(int row_, int col_) const {

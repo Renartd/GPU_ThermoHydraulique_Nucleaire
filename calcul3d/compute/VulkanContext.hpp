@@ -255,15 +255,23 @@ private:
         // → Total : (16×2 + 5×2) = 42 STORAGE + (1×2 + 1×2) = 4 UNIFORM
         // On double pour marge
         VkDescriptorPoolSize sizes[] = {
-            { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 100 },
-            { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,  20 },
+            { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 200 },
+            { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,  40 },
         };
         VkDescriptorPoolCreateInfo ci{};
         ci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        ci.maxSets       = 20;
+        // FREE_DESCRIPTOR_SET_BIT permet de libérer les sets individuellement
+        ci.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+        ci.maxSets       = 40;
         ci.poolSizeCount = 2;
         ci.pPoolSizes    = sizes;
         VK_CHECK_CTX(vkCreateDescriptorPool(device, &ci, nullptr, &descriptorPool));
+    }
+
+    // Réinitialise le pool de descripteurs (libère tous les sets alloués)
+    void resetDescriptorPool() {
+        if (descriptorPool)
+            vkResetDescriptorPool(device, descriptorPool, 0);
     }
 
     uint32_t _findMemType(uint32_t typeBits, VkMemoryPropertyFlags flags) {

@@ -253,8 +253,13 @@ public:
         xenon.setEquilibrium(Fsrc, phi2_flat);
         xenonActive = true;
 
-        // Init GPU
+        // ── Init GPU — cleanup d'abord si déjà initialisé ────
         try {
+            if (gpuAccel) {          // réinit : détruire les anciens buffers
+                _cleanupGPU();
+                gpuAccel = false;
+                _pingPong = false;
+            }
             _initGPU();
             gpuAccel = true;
             std::cout << "[NeutronCompute v2] GPU SoA actif — "
@@ -643,7 +648,7 @@ private:
         VkDeviceSize sz = (VkDeviceSize)total2d * sizeof(float);
         for (auto& b : bufs) {
             void* ptr;
-            vkMapMemory(_ctx->device, b.mem, 0, sz, 0, &ptr);
+            vkMapMemory(_ctx->device, b.mem, 0, VK_WHOLE_SIZE, 0, &ptr);
             memcpy(ptr, b.data, sz);
             vkUnmapMemory(_ctx->device, b.mem);
         }
@@ -652,14 +657,14 @@ private:
     void _uploadZone() {
         VkDeviceSize sz = (VkDeviceSize)total2d * sizeof(int);
         void* ptr;
-        vkMapMemory(_ctx->device, _mZone, 0, sz, 0, &ptr);
+        vkMapMemory(_ctx->device, _mZone, 0, VK_WHOLE_SIZE, 0, &ptr);
         memcpy(ptr, zone_flat.data(), sz);
         vkUnmapMemory(_ctx->device, _mZone);
     }
 
     void _uploadParams() {
         void* ptr;
-        vkMapMemory(_ctx->device, _mParams, 0, sizeof(NeutronParams), 0, &ptr);
+        vkMapMemory(_ctx->device, _mParams, 0, VK_WHOLE_SIZE, 0, &ptr);
         memcpy(ptr, &params, sizeof(NeutronParams));
         vkUnmapMemory(_ctx->device, _mParams);
     }
@@ -667,7 +672,7 @@ private:
     void _uploadReduceParams() {
         ReduceParams rp{total2d, {0,0,0}};
         void* ptr;
-        vkMapMemory(_ctx->device, _mRedParams, 0, sizeof(ReduceParams), 0, &ptr);
+        vkMapMemory(_ctx->device, _mRedParams, 0, VK_WHOLE_SIZE, 0, &ptr);
         memcpy(ptr, &rp, sizeof(ReduceParams));
         vkUnmapMemory(_ctx->device, _mRedParams);
     }
@@ -887,7 +892,7 @@ private:
 
         void* ptr;
         vkMapMemory(_ctx->device, _mRBreduce, 0,
-                    (VkDeviceSize)_nWorkgroups*sizeof(float), 0, &ptr);
+                    VK_WHOLE_SIZE, 0, &ptr);
         float F=0.0f;
         for (int i=0;i<_nWorkgroups;i++) F+=((float*)ptr)[i];
         vkUnmapMemory(_ctx->device, _mRBreduce);
@@ -907,8 +912,8 @@ private:
         _ctx->endOneShot(cb);
 
         void* ptr1; void* ptr2;
-        vkMapMemory(_ctx->device, _mRBphi1, 0, sz, 0, &ptr1);
-        vkMapMemory(_ctx->device, _mRBphi2, 0, sz, 0, &ptr2);
+        vkMapMemory(_ctx->device, _mRBphi1, 0, VK_WHOLE_SIZE, 0, &ptr1);
+        vkMapMemory(_ctx->device, _mRBphi2, 0, VK_WHOLE_SIZE, 0, &ptr2);
         memcpy(phi1_flat.data(), ptr1, sz);
         memcpy(phi2_flat.data(), ptr2, sz);
         vkUnmapMemory(_ctx->device, _mRBphi1);
@@ -941,11 +946,18 @@ private:
 
         if(_pipeFVM){vkDestroyPipeline(dev,_pipeFVM,nullptr);_pipeFVM=VK_NULL_HANDLE;}
         if(_pipeRed){vkDestroyPipeline(dev,_pipeRed,nullptr);_pipeRed=VK_NULL_HANDLE;}
-        if(_layoutFVM){vkDestroyPipelineLayout(dev,_layoutFVM,nullptr);}
-        if(_layoutRed){vkDestroyPipelineLayout(dev,_layoutRed,nullptr);}
-        if(_dslFVM){vkDestroyDescriptorSetLayout(dev,_dslFVM,nullptr);}
-        if(_dslRed){vkDestroyDescriptorSetLayout(dev,_dslRed,nullptr);}
-        if(_shFVM){vkDestroyShaderModule(dev,_shFVM,nullptr);}
-        if(_shRed){vkDestroyShaderModule(dev,_shRed,nullptr);}
+        if(_layoutFVM){vkDestroyPipelineLayout(dev,_layoutFVM,nullptr);_layoutFVM=VK_NULL_HANDLE;}
+        if(_layoutRed){vkDestroyPipelineLayout(dev,_layoutRed,nullptr);_layoutRed=VK_NULL_HANDLE;}
+        if(_dslFVM){vkDestroyDescriptorSetLayout(dev,_dslFVM,nullptr);_dslFVM=VK_NULL_HANDLE;}
+        if(_dslRed){vkDestroyDescriptorSetLayout(dev,_dslRed,nullptr);_dslRed=VK_NULL_HANDLE;}
+        if(_shFVM){vkDestroyShaderModule(dev,_shFVM,nullptr);_shFVM=VK_NULL_HANDLE;}
+        if(_shRed){vkDestroyShaderModule(dev,_shRed,nullptr);_shRed=VK_NULL_HANDLE;}
+
+        // Les descriptor sets sont invalidés par la destruction du pool
+        // (le pool lui-même est géré par VulkanContext)
+        _descAB=VK_NULL_HANDLE; _descBA=VK_NULL_HANDLE;
+        _descRedA=VK_NULL_HANDLE; _descRedB=VK_NULL_HANDLE;
+
+        _pingPong = false;
     }
 };

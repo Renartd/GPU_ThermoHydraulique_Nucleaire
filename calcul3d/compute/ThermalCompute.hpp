@@ -186,6 +186,8 @@ public:
         _descSetLayout=VK_NULL_HANDLE; _shaderModule=VK_NULL_HANDLE;
         _bufA=_bufB=_bufQ=_bufMask=_bufParams=_rbBuf=VK_NULL_HANDLE;
         _memA=_memB=_memQ=_memMask=_memParams=_rbMem=VK_NULL_HANDLE;
+        _descSetAB=_descSetBA=VK_NULL_HANDLE;
+        ready=false;
     }
 
 private:
@@ -267,7 +269,7 @@ private:
             _rbBuf, _rbMem);
 
         void* ptr;
-        vkMapMemory(_ctx->device, _memMask, 0, szMask, 0, &ptr);
+        vkMapMemory(_ctx->device, _memMask, 0, VK_WHOLE_SIZE, 0, &ptr);
         memcpy(ptr, mask_flat.data(), szMask);
         vkUnmapMemory(_ctx->device, _memMask);
 
@@ -285,7 +287,7 @@ private:
             stg, stgMem);
 
         void* ptr;
-        vkMapMemory(_ctx->device, stgMem, 0, sz, 0, &ptr);
+        vkMapMemory(_ctx->device, stgMem, 0, VK_WHOLE_SIZE, 0, &ptr);
         memcpy(ptr, T_flat3d.data(), sz);
         vkUnmapMemory(_ctx->device, stgMem);
 
@@ -301,7 +303,7 @@ private:
 
     void uploadParams() {
         void* ptr;
-        vkMapMemory(_ctx->device, _memParams, 0, sizeof(SimParams), 0, &ptr);
+        vkMapMemory(_ctx->device, _memParams, 0, VK_WHOLE_SIZE, 0, &ptr);
         memcpy(ptr, &params, sizeof(SimParams));
         vkUnmapMemory(_ctx->device, _memParams);
     }
@@ -309,7 +311,7 @@ private:
     void uploadQVol(const std::vector<float>& q_vol_2d) {
         VkDeviceSize sz = total2d * sizeof(float);
         void* ptr;
-        vkMapMemory(_ctx->device, _memQ, 0, sz, 0, &ptr);
+        vkMapMemory(_ctx->device, _memQ, 0, VK_WHOLE_SIZE, 0, &ptr);
         size_t cpSz = std::min((size_t)total2d, q_vol_2d.size()) * sizeof(float);
         memcpy(ptr, q_vol_2d.data(), cpSz);
         vkUnmapMemory(_ctx->device, _memQ);
@@ -423,7 +425,7 @@ private:
         _ctx->endOneShot(cb);
 
         void* ptr;
-        vkMapMemory(_ctx->device, _rbMem, 0, sz, 0, &ptr);
+        vkMapMemory(_ctx->device, _rbMem, 0, VK_WHOLE_SIZE, 0, &ptr);
         memcpy(T_flat3d.data(), ptr, sz);
         vkUnmapMemory(_ctx->device, _rbMem);
     }
