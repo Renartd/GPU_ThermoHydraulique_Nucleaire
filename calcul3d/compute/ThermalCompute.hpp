@@ -73,6 +73,7 @@ public:
     int grid_slices = 8;
     int total       = 0;   // cols×rows×slices
     int total2d     = 0;   // cols×rows
+    int sub_xy      = 1;   // subdivisions XZ par assemblage
 
     SimParams params{};
 
@@ -84,6 +85,11 @@ public:
             grid_rows   = grid.rows;
             grid_cols   = grid.cols;
             grid_slices = nSlices;
+            // Déduire sub_xy
+            { int n_assy_c=0;
+              for(const auto& cu:grid.cubes) n_assy_c=std::max(n_assy_c,cu.col_idx+1);
+              sub_xy=(n_assy_c>0&&grid_cols>n_assy_c)?grid_cols/n_assy_c:1;
+            }
             total2d     = grid_rows * grid_cols;
             total       = total2d * grid_slices;
 
@@ -241,12 +247,17 @@ private:
         mask_flat.assign(total2d, 0);
 
         for (const auto& cube : grid.cubes) {
-            int i2d = cube.row * grid_cols + cube.col_idx;
-            if (i2d < total2d) {
-                mask_flat[i2d] = 1;
-                for (int s = 0; s < grid_slices; ++s)
-                    T_flat3d[s * total2d + i2d] = cube.temperature;
-                T_flat[i2d] = cube.temperature;
+            for (int dr=0; dr<sub_xy; ++dr)
+            for (int dc=0; dc<sub_xy; ++dc) {
+                int pr  = cube.row     * sub_xy + dr;
+                int pc  = cube.col_idx * sub_xy + dc;
+                int i2d = pr * grid_cols + pc;
+                if (i2d >= 0 && i2d < total2d) {
+                    mask_flat[i2d] = 1;
+                    for (int s=0; s<grid_slices; ++s)
+                        T_flat3d[s*total2d+i2d] = cube.temperature;
+                    T_flat[i2d] = cube.temperature;
+                }
             }
         }
     }

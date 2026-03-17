@@ -108,6 +108,8 @@ public:
     float C_bore_ppm   = 0.0f;    // ppm — concentration bore (REP)
 
     int grid_cols=0, grid_rows=0, total2d=0;
+    int sub_xy=1;   // subdivisions XZ par assemblage
+    int n_assy_cols=0, n_assy_rows=0;  // dimensions grille assemblage
     NeutronParams params{};
 
     struct ModNode  { int i2d; float rho_rel; };
@@ -127,9 +129,20 @@ public:
               ReactorType rt, float enrichment, float T0=300.0f)
     {
         _ctx = &ctx; _rt = rt; _epsilon = enrichment;
-        grid_cols = grid.cols;
-        grid_rows = grid.rows;
-        total2d   = grid.total2d();
+        grid_cols   = grid.cols;   // = n_assy_cols * sub_xy
+        grid_rows   = grid.rows;   // = n_assy_rows * sub_xy
+        total2d     = grid.total2d();
+        // Déduire sub_xy depuis la grille
+        // cube.col_idx max = n_assy_cols-1, grid_cols = n_assy_cols * sub_xy
+        n_assy_cols = 0; n_assy_rows = 0;
+        for (const auto& cu : grid.cubes) {
+            n_assy_cols = std::max(n_assy_cols, cu.col_idx+1);
+            n_assy_rows = std::max(n_assy_rows, cu.row+1);
+        }
+        if (n_assy_cols < 1) n_assy_cols = grid_cols;
+        if (n_assy_rows < 1) n_assy_rows = grid_rows;
+        sub_xy = (n_assy_cols > 0) ? grid_cols / n_assy_cols : 1;
+        if (sub_xy < 1) sub_xy = 1;
 
         // Pas spatiaux en cm
         float dx_cm = grid.dx_m * 100.0f;
@@ -182,35 +195,46 @@ public:
         xs_nuSF1.assign(total2d,0); xs_nuSF2.assign(total2d,0);
         xs_chi1.assign(total2d,0);  xs_chi2.assign(total2d,0);
 
-        // Profil initial cosinus
+        // Profil initial cosinus — remplit toutes les sub_xy×sub_xy sous-cellules
         float R = std::sqrt(grid.offsetX*grid.offsetX + grid.offsetZ*grid.offsetZ);
         if (R < 0.1f) R = 1.0f;
-        for (const auto& c : grid.cubes) {
-            int i = c.row * grid_cols + c.col_idx;
-            if (i < 0 || i >= total2d) continue;
-            float r = std::sqrt(c.pos.x*c.pos.x + c.pos.z*c.pos.z);
+        for (const auto& cu : grid.cubes) {
+            float r = std::sqrt(cu.pos.x*cu.pos.x + cu.pos.z*cu.pos.z);
             float v = cosf(std::min((float)M_PI*r/(2.0f*R*1.05f), (float)M_PI*0.499f));
-            phi1_flat[i] = v * 0.1f;
-            phi2_flat[i] = v * 0.9f;
-            zone_flat[i] = 1;
-        }
-
-        // Zones
-        _moderatorNodes.clear(); _reflectorNodes.clear(); _controlRods.clear();
-        for (const auto& zn : grid.zoneNodes) {
-            int i2d = zn.row * grid_cols + zn.col;
-            if (i2d<0 || i2d>=total2d) continue;
-            if (zn.zone==NodeZone::MODERATOR) {
-                _moderatorNodes.push_back({i2d, zn.param});
-                zone_flat[i2d] = 2;
-            } else if (zn.zone==NodeZone::REFLECTOR) {
-                _reflectorNodes.push_back(i2d);
-                zone_flat[i2d] = 3;
-            } else if (zn.zone==NodeZone::CONTROL_ROD) {
-                _controlRods.push_back({zn.row, zn.col, zn.param});
-                zone_flat[i2d] = 4;
+            // Remplir les sub_xy×sub_xy sous-cellules de cet assemblage
+            for (int dr=0; dr<sub_xy; ++dr)
+            for (int dc=0; dc<sub_xy; ++dc) {
+                int pr = cu.row     * sub_xy + dr;
+                int pc = cu.col_idx * sub_xy + dc;
+                int i  = pr * grid_cols + pc;
+                if (i < 0 || i >= total2d) continue;
+                phi1_flat[i] = v * 0.1f;
+                phi2_flat[i] = v * 0.9f;
+                zone_flat[i] = 1;
             }
         }
+
+        // Zones — remplit les sub_xy×sub_xy sous-cellules pour chaque zone
+        _moderatorNodes.clear(); _reflectorNodes.clear(); _controlRods.clear();
+        for (const auto& zn : grid.zoneNodes) {
+            for (int dr=0; dr<sub_xy; ++dr)
+            for (int dc=0; dc<sub_xy; ++dc) {
+                int pr  = zn.row * sub_xy + dr;
+                int pc  = zn.col * sub_xy + dc;
+                int i2d = pr * grid_cols + pc;
+                if (i2d<0 || i2d>=total2d) continue;
+                if (zn.zone==NodeZone::MODERATOR) {
+                    _moderatorNodes.push_back({i2d, zn.param});
+                    zone_flat[i2d] = 2;
+                } else if (zn.zone==NodeZone::REFLECTOR) {
+                    _reflectorNodes.push_back(i2d);
+                    zone_flat[i2d] = 3;
+                } else if (zn.zone==NodeZone::CONTROL_ROD) {
+                    _controlRods.push_back({zn.row, zn.col, zn.param});
+                    zone_flat[i2d] = 4;
+                }
+            } // dc
+        } // zn
 
         // Calcul XS initial
         rebuildXS(grid, T0, 1.0f);
@@ -280,9 +304,12 @@ public:
     void rebuildXS(const GridData& grid, float T0, float rho_mod) {
         for (int i=0; i<total2d; ++i) {
             int row=i/grid_cols, col=i%grid_cols;
+            // Retrouver l'assemblage parent (espace assemblage)
+            int assy_row = row / sub_xy;
+            int assy_col = col / sub_xy;
             float T_fuel = T0;
             for (const auto& c : grid.cubes)
-                if (c.row==row && c.col_idx==col) { T_fuel=c.temperature; break; }
+                if (c.row==assy_row && c.col_idx==assy_col) { T_fuel=c.temperature; break; }
 
             int zt = zone_flat[i];
             XS2G xs;
@@ -388,10 +415,18 @@ public:
     void applyToGrid(GridData& grid) {
         float phi_max = *std::max_element(phi_total.begin(), phi_total.end());
         if (phi_max < 1e-10f) phi_max = 1.0f;
-        for (auto& c : grid.cubes) {
-            int i = c.row*grid_cols + c.col_idx;
-            if (i<0||i>=total2d) continue;
-            c.flux = phi_total[i] / phi_max;
+        for (auto& cu : grid.cubes) {
+            // Moyenne du flux sur les sub_xy×sub_xy sous-cellules
+            float phi_avg = 0.0f; int cnt = 0;
+            for (int dr=0; dr<sub_xy; ++dr)
+            for (int dc=0; dc<sub_xy; ++dc) {
+                int pr = cu.row     * sub_xy + dr;
+                int pc = cu.col_idx * sub_xy + dc;
+                int i  = pr * grid_cols + pc;
+                if (i<0||i>=total2d) continue;
+                phi_avg += phi_total[i]; cnt++;
+            }
+            cu.flux = (cnt>0) ? (phi_avg/cnt) / phi_max : 0.0f;
         }
     }
 
