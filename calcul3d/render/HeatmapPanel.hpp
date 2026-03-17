@@ -79,7 +79,7 @@ struct HeatmapPanel {
         // (déjà dans cube.temperature via applyToGrid)
 
         // Agréger par assemblage
-        std::vector<float> T_assy(assy_rows * assy_cols, grid.tempMin);
+        std::vector<float> T_assy(assy_rows * assy_cols, 0.0f);
         std::vector<int>   cnt_assy(assy_rows * assy_cols, 0);
 
         for (const auto& cube : grid.cubes) {
@@ -89,7 +89,7 @@ struct HeatmapPanel {
             cnt_assy[ai] += 1;
         }
         for (int i = 0; i < assy_rows * assy_cols; ++i)
-            if (cnt_assy[i] > 0) T_assy[i] /= cnt_assy[i];
+            T_assy[i] = (cnt_assy[i] > 0) ? T_assy[i] / cnt_assy[i] : grid.tempMin;
 
         // Masque assemblage
         std::vector<int> mask(assy_rows * assy_cols, 0);
@@ -97,7 +97,8 @@ struct HeatmapPanel {
             mask[cube.row * assy_cols + cube.col_idx] = 1;
 
         float tMin = grid.tempMin, tMax = grid.tempMax;
-        if (tMax <= tMin) tMax = tMin + 1.0f;
+        // Plage minimale de 5°C pour éviter division par zéro au démarrage
+        if (tMax - tMin < 5.0f) { tMax = tMin + 5.0f; }
 
         // ── Dessin ────────────────────────────────────────────
         for (int r = 0; r < assy_rows; ++r) {

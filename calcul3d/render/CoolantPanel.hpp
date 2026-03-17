@@ -222,10 +222,13 @@ struct CoolantPanel {
     //  RENDU 3D — flèches dans les interstices entre assemblages
     // ================================================================
     void draw3DArrows(const GridData& grid, const CoolantModel& model,
-                      const RenderOptions& ropt) {
+                      const RenderOptions& ropt,
+                      int n_assy_cols = 0, int n_assy_rows = 0) {
         if (!active) return;
         if (displayMode == CoolantDisplayMode::OVERLAY) return;
 
+        int nc = (n_assy_cols > 0) ? n_assy_cols : grid.cols;
+        int nr = (n_assy_rows > 0) ? n_assy_rows : grid.rows;
         arrowAnim += GetFrameTime() * 1.2f;
         if (arrowAnim > 1.0f) arrowAnim -= 1.0f;
 
@@ -238,13 +241,13 @@ struct CoolantPanel {
 
         // Vitesse max pour normalisation
         float v_max = 0.001f;
-        for (int r=0; r<grid.rows; ++r)
-            for (int c=0; c<grid.cols; ++c)
+        for (int r=0; r<nr; ++r)
+            for (int c=0; c<nc; ++c)
                 v_max = fmaxf(v_max, model.getVfluid(r,c));
 
         // ---- Interstices VERTICAUX (entre col c et c+1, pour chaque row) ----
-        for (int r = 0; r < grid.rows; ++r) {
-            for (int c = 0; c < grid.cols-1; ++c) {
+        for (int r = 0; r < nr; ++r) {
+            for (int c = 0; c < nc-1; ++c) {
                 // Vérifie qu'au moins un des deux côtés a un assemblage
                 bool hasL = false, hasR = false;
                 float posX_L = 0, posX_R = 0, posZ = 0;
@@ -306,8 +309,8 @@ struct CoolantPanel {
         }
 
         // ---- Interstices HORIZONTAUX (entre row r et r+1, pour chaque col) ----
-        for (int r = 0; r < grid.rows-1; ++r) {
-            for (int c = 0; c < grid.cols; ++c) {
+        for (int r = 0; r < nr-1; ++r) {
+            for (int c = 0; c < nc; ++c) {
                 bool hasT = false, hasB = false;
                 float posZ_T = 0, posZ_B = 0, posX = 0;
                 for (const auto& cube : grid.cubes) {
@@ -365,13 +368,18 @@ struct CoolantPanel {
     //  OVERLAY 2D température fluide
     // ================================================================
     void draw2DOverlay(const GridData& grid, const CoolantModel& model,
-                       int sw, int sh) {
+                       int sw, int sh,
+                       int n_assy_cols = 0, int n_assy_rows = 0) {
         if (!active) return;
         if (displayMode == CoolantDisplayMode::FLECHES) return;
 
+        // Toujours à l'échelle assemblage
+        int nc = (n_assy_cols > 0) ? n_assy_cols : grid.cols;
+        int nr = (n_assy_rows > 0) ? n_assy_rows : grid.rows;
+
         int cellPx = 28;
-        int panelW = grid.cols * cellPx + 2;
-        int panelH = grid.rows * cellPx + 30;
+        int panelW = nc * cellPx + 2;
+        int panelH = nr * cellPx + 30;
         // Position : bas-gauche fixe (sous le bloc convergence)
         int panelX = 10;
         int panelY = sh - panelH - 10;
@@ -381,17 +389,17 @@ struct CoolantPanel {
         DrawText("FLUIDE T(C) / v(m/s)", panelX+4, panelY+4, 10, {80,200,255,255});
 
         float Tf_min = model.params.T_inlet, Tf_max = model.params.T_inlet+1.f;
-        for (int r=0; r<grid.rows; ++r)
-            for (int c=0; c<grid.cols; ++c) {
-                float t=model.getTfluid(r,c);
+        for (int r=0; r<nr; ++r)
+            for (int cc=0; cc<nc; ++cc) {
+                float t=model.getTfluid(r,cc);
                 Tf_min=fminf(Tf_min,t); Tf_max=fmaxf(Tf_max,t);
             }
 
         int mapY = panelY+20;
-        for (int r=0; r<grid.rows; ++r) {
-            for (int c=0; c<grid.cols; ++c) {
-                int px=panelX+c*cellPx, py=mapY+r*cellPx;
-                float T_f=model.getTfluid(r,c);
+        for (int r=0; r<nr; ++r) {
+            for (int cc=0; cc<nc; ++cc) {
+                int px=panelX+cc*cellPx, py=mapY+r*cellPx;
+                float T_f=model.getTfluid(r,cc);
                 float norm=(Tf_max>Tf_min)?(T_f-Tf_min)/(Tf_max-Tf_min):0.f;
                 // jet colormap sur T_fluide
                 Color col = {
@@ -403,7 +411,7 @@ struct CoolantPanel {
                 DrawRectangle(px,py,cellPx,cellPx,col);
                 DrawRectangleLines(px,py,cellPx,cellPx,{0,0,0,60});
                 char vbuf[8];
-                snprintf(vbuf,sizeof(vbuf),"%.2f",model.getVfluid(r,c));
+                snprintf(vbuf,sizeof(vbuf),"%.2f",model.getVfluid(r,cc));
                 DrawText(vbuf,px+2,py+cellPx/2-4,8,WHITE);
             }
         }

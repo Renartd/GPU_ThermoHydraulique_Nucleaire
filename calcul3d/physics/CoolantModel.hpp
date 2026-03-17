@@ -145,10 +145,16 @@ struct CoolantModel {
     }
 
     // ---- Initialisation ----
-    void init(const GridData& grid, const CoolantParams& p) {
+    // n_assy_cols/rows : nombre d'assemblages (échelle assemblage, pas sub_xy)
+    void init(const GridData& grid, const CoolantParams& p,
+              int n_assy_cols = 0, int n_assy_rows = 0) {
         params = p;
-        T_fluid.assign(grid.rows, std::vector<float>(grid.cols, p.T_inlet));
-        v_fluid.assign(grid.rows, std::vector<float>(grid.cols, 0.0f));
+        // Utilise l'échelle assemblage si fournie, sinon grid.cols/rows
+        int nc = (n_assy_cols > 0) ? n_assy_cols : grid.cols;
+        int nr = (n_assy_rows > 0) ? n_assy_rows : grid.rows;
+        _nc = nc; _nr = nr;
+        T_fluid.assign(nr, std::vector<float>(nc, p.T_inlet));
+        v_fluid.assign(nr, std::vector<float>(nc, 0.0f));
         initialized = true;
 
         // Mode convection par défaut selon fluide
@@ -191,26 +197,29 @@ struct CoolantModel {
     void update(const GridData& grid) {
         if (!initialized) return;
 
-        // Masque des assemblages
-        std::vector<int> mask(grid.rows * grid.cols, 0);
-        std::vector<float> T_comb(grid.rows * grid.cols, params.T_inlet);
+        // Utilise l'échelle ASSEMBLAGE (_nc/_nr), pas la grille physique subdivisée
+        int nc = (_nc > 0) ? _nc : grid.cols;
+        int nr = (_nr > 0) ? _nr : grid.rows;
+
+        // Masque des assemblages (cube.row/col_idx sont toujours à l'échelle assy)
+        std::vector<int> mask(nr * nc, 0);
+        std::vector<float> T_comb(nr * nc, params.T_inlet);
         for (const auto& c : grid.cubes) {
-            int idx = c.row * grid.cols + c.col_idx;
-            mask[idx]  = 1;
+            if (c.row >= nr || c.col_idx >= nc) continue;
+            int idx = c.row * nc + c.col_idx;
+            mask[idx]   = 1;
             T_comb[idx] = c.temperature;
         }
 
-        float dz = params.H_coeur / fmaxf(1.0f, (float)grid.rows);  // hauteur d'une cellule
+        float dz = params.H_coeur / fmaxf(1.0f, (float)nr);
 
-        // Pour chaque colonne (col fixe), le fluide monte de row=(rows-1) vers row=0
-        for (int col = 0; col < grid.cols; ++col) {
+        for (int col = 0; col < nc; ++col) {
 
-            float T_f = params.T_inlet;  // température fluide entrée (bas)
+            float T_f = params.T_inlet;
 
-            // ΔT colonne pour thermosiphon : estimer depuis T moy de la colonne
             float T_moy_col = 0.0f; int n_col = 0;
-            for (int row = 0; row < grid.rows; ++row) {
-                int idx = row * grid.cols + col;
+            for (int row = 0; row < nr; ++row) {
+                int idx = row * nc + col;
                 if (mask[idx]) { T_moy_col += T_comb[idx]; ++n_col; }
             }
             float dT_col = (n_col > 0) ? (T_moy_col/n_col - params.T_inlet) : 0.0f;
@@ -220,9 +229,9 @@ struct CoolantModel {
             float v  = calcVitesse(fp, dT_col, params.convMode);
             float mdot = fp.rho * v * params.A_canal;  // kg/s
 
-            // Montée de bas (row=rows-1) vers haut (row=0)
-            for (int row = grid.rows - 1; row >= 0; --row) {
-                int idx = row * grid.cols + col;
+            // Montée de bas (row=nr-1) vers haut (row=0)
+            for (int row = nr - 1; row >= 0; --row) {
+                int idx = row * nc + col;
 
                 T_fluid[row][col] = T_f;
                 v_fluid[row][col] = v;
@@ -252,6 +261,8 @@ struct CoolantModel {
     }
 
     // ---- T fluide à une position ----
+    int _nc = 0, _nr = 0;  // dimensions assemblage (échelle assy)
+
     float getTfluid(int row, int col) const {
         if (row < 0 || row >= (int)T_fluid.size()) return params.T_inlet;
         if (col < 0 || col >= (int)T_fluid[row].size()) return params.T_inlet;

@@ -329,7 +329,7 @@ int main() {
     coolantParams.H_coeur = grid.dims.height;
     coolantParams.D_h     = grid.dims.spacing * 0.8f;
     coolantParams.A_canal = coolantParams.D_h * coolantParams.D_h * 0.785f;
-    coolantModel.init(grid, coolantParams);
+    coolantModel.init(grid, coolantParams, meshConfig.n_assy_cols, meshConfig.n_assy_rows);
 
     // ── Fenêtre ───────────────────────────────────────────────
     const int SW = 1280, SH = 800;
@@ -514,7 +514,7 @@ int main() {
             transientHistory.clear();
             _lastRecordTime   = -1.0f;
             xenonPanel.reset();
-            coolantModel.init(grid, coolantParams);
+            coolantModel.init(grid, coolantParams, meshConfig.n_assy_cols, meshConfig.n_assy_rows);
 
             if (neutronAvailable) {
                 grid.autoGenerateZones(reactorCfg.nReflectorRings);
@@ -584,7 +584,7 @@ int main() {
             modRenderer.showReflector  = reactorCfg.showReflector;
             modRenderer.showControlRod = reactorCfg.showControlRod;
             modRenderer.draw(grid, renderOpt, (float)GetTime());
-            coolantPanel.draw3DArrows(grid, coolantModel, renderOpt);
+            coolantPanel.draw3DArrows(grid, coolantModel, renderOpt, meshConfig.n_assy_cols, meshConfig.n_assy_rows);
         EndMode3D();
 
         // ── Panneaux UI ──────────────────────────────────────
@@ -621,9 +621,9 @@ int main() {
                 ((int)coolantPanel.displayMode + 1) % 3);
 
         if (coolantPanel.updatePanel(coolantParams, simCtrl, SW, SH))
-            coolantModel.init(grid, coolantParams);
+            coolantModel.init(grid, coolantParams, meshConfig.n_assy_cols, meshConfig.n_assy_rows);
 
-        coolantPanel.draw2DOverlay(grid, coolantModel, SW, SH);
+        coolantPanel.draw2DOverlay(grid, coolantModel, SW, SH, meshConfig.n_assy_cols, meshConfig.n_assy_rows);
         coolantPanel.drawInfoOverlay(coolantModel, SW);
 
         heatmapPanel.draw(grid, meshConfig, SW, SH);
