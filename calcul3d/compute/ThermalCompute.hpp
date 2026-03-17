@@ -143,18 +143,44 @@ public:
     }
 
     // --------------------------------------------------------
-    //  Copie T_axial (profil vertical) + température moyenne dans chaque cube
+    //  Copie T_axial + température moyenne dans chaque cube
+    //  Tient compte de sub_xy : moyenne sur les sub_xy×sub_xy sous-cellules
     // --------------------------------------------------------
-    void applyToGrid(GridData& grid) {
+    void applyToGrid(GridData& grid, int sub_xy = 1) {
         for (auto& cube : grid.cubes) {
-            int i2d = cube.row * grid_cols + cube.col_idx;
-            if (i2d >= total2d) continue;
+            // Base de la sous-grille pour cet assemblage
+            int base_r = cube.row     * sub_xy;
+            int base_c = cube.col_idx * sub_xy;
 
-            cube.temperature = T_flat[i2d];
+            // Moyenne thermique sur les sub_xy × sub_xy sous-cellules
+            float T_avg = 0.0f;
+            int   count = 0;
+            for (int dr = 0; dr < sub_xy; ++dr)
+            for (int dc = 0; dc < sub_xy; ++dc) {
+                int r2 = base_r + dr;
+                int c2 = base_c + dc;
+                int i2d = r2 * grid_cols + c2;
+                if (i2d < 0 || i2d >= total2d) continue;
+                T_avg += T_flat[i2d];
+                count++;
+            }
+            cube.temperature = (count > 0) ? T_avg / count : params.T_inlet;
 
+            // Profil axial : moyenne sur les sous-cellules XZ pour chaque tranche Y
             cube.T_axial.resize(grid_slices);
-            for (int s = 0; s < grid_slices; ++s)
-                cube.T_axial[s] = T_flat3d[s * total2d + i2d];
+            for (int s = 0; s < grid_slices; ++s) {
+                float Ts = 0.0f; int cnt = 0;
+                for (int dr = 0; dr < sub_xy; ++dr)
+                for (int dc = 0; dc < sub_xy; ++dc) {
+                    int r2  = base_r + dr;
+                    int c2  = base_c + dc;
+                    int i2d = r2 * grid_cols + c2;
+                    if (i2d < 0 || i2d >= total2d) continue;
+                    Ts += T_flat3d[s * total2d + i2d];
+                    cnt++;
+                }
+                cube.T_axial[s] = (cnt > 0) ? Ts / cnt : params.T_inlet;
+            }
         }
         grid.updateTempRange();
     }

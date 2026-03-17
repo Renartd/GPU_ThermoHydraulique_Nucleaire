@@ -30,7 +30,8 @@
 #include "render/ColorMap.hpp"
 #include "render/CubeRenderer.hpp"
 #include "render/HUD.hpp"
-#include "render/DimsPanel.hpp"        // ← v2 (h_target + MeshConfig)
+#include "render/DimsPanel.hpp"        // ← [P] dimensions physiques
+#include "render/MeshPanel.hpp"          // ← [D] résolution maillage
 #include "render/SimPanel.hpp"
 #include "render/HeatmapPanel.hpp"
 #include "render/CubeRenderer3D.hpp"
@@ -138,6 +139,10 @@ static void reinitSimulation(
     if (thermalAvail)
         nf.init(tc.params.dt, tc.params.rho_cp, 2.0f);
 
+    // Resync caloporteur avec nouvelles dimensions physiques
+    cparams.H_coeur = mc.assy_height_m;
+    cparams.D_h     = mc.assy_gap_m;  // diamètre hydraulique ≈ jeu inter-assy
+    cparams.A_canal = cparams.D_h * cparams.D_h * 0.785f;
     cm.init(grid, cparams);
 
     std::cout << "[reinit] Maillage " << mc.cols << "x"
@@ -187,16 +192,25 @@ int main() {
     // ── [Mesh1] Initialisation MeshConfig ────────────────────
     MeshConfig meshConfig;
     {
-        meshConfig.assy_pitch_m  = grid.dims.width + grid.dims.spacing;
-        meshConfig.assy_height_m = grid.dims.height;
+        // Dimensions par défaut REP 900MW (17×17, pitch=0.217m)
+        // On utilise les dims du fichier si elles sont plausibles,
+        // sinon on tombe sur les valeurs standards REP 900MW
+        float file_width   = grid.dims.width;
+        float file_spacing = grid.dims.spacing;
+        float file_height  = grid.dims.height;
+        // Valider : width doit être entre 0.05m et 1.0m
+        meshConfig.assy_width_m  = (file_width  > 0.05f && file_width  < 1.0f)
+                                 ? file_width  : 0.2140f;
+        meshConfig.assy_gap_m    = (file_spacing> 0.001f&& file_spacing< 0.5f)
+                                 ? file_spacing: 0.0030f;
+        meshConfig.assy_height_m = (file_height > 0.1f  && file_height < 20.0f)
+                                 ? file_height : 3.658f;
         meshConfig.n_assy_cols   = grid.cols;
         meshConfig.n_assy_rows   = grid.rows;
         // Par défaut : 8×8 subdivisions par assemblage en XZ
         // sub_z calculé pour avoir des cubes aussi réguliers que possible
-        meshConfig.sub_xy        = 8;
-        int approx_sub_z = std::max(1, (int)std::round(
-            (meshConfig.assy_height_m / meshConfig.assy_pitch_m) * meshConfig.sub_xy));
-        meshConfig.sub_z         = approx_sub_z;
+        meshConfig.sub_xy = 1;    // 1 cellule par assemblage en XZ
+        meshConfig.sub_z  = 16;   // 16 tranches axiales
         meshConfig.update();
 
         grid.applyMesh(meshConfig);
@@ -323,11 +337,13 @@ int main() {
     SetTargetFPS(60);
 
     OrbitalCamera camera;
-    camera.distance = fmaxf((float)grid.cols, (float)grid.rows)
-                    * meshConfig.dx * 1.5f;
+    camera.distance = fmaxf((float)meshConfig.n_assy_cols,
+                               (float)meshConfig.n_assy_rows)
+                    * meshConfig.assy_pitch_m * 1.5f;
 
     RenderOptions renderOpt;
-    renderOpt.cubeSize   = meshConfig.dx;
+    // cubeSize = facteur d echelle [0..1] × assy_pitch
+    renderOpt.cubeSize   = 0.95f;
     renderOpt.cubeHeight = meshConfig.core_height_m() * 0.1f;
     renderOpt.colormapMode = true;
 
@@ -340,6 +356,8 @@ int main() {
 
     DimsPanel dimsPanel;
     dimsPanel.init(meshConfig);
+    MeshPanel meshPanel;
+    meshPanel.init(meshConfig);
     dimsPanel.onChange = [&](const MeshConfig& mc) {
         meshConfig = mc;
         reinitSimulation(vkCtx, grid, meshConfig,
@@ -349,11 +367,26 @@ int main() {
                          params.tempEntree,
                          thermalAvailable, neutronAvailable);
         // Sync rendering
-        renderOpt.cubeSize   = meshConfig.dx;
+        renderOpt.cubeSize   = 0.95f;
         renderOpt.cubeHeight = meshConfig.core_height_m() * 0.1f;
-        camera.distance = fmaxf((float)meshConfig.cols,
-                                (float)meshConfig.rows)
-                        * meshConfig.dx * 1.5f;
+        camera.distance = fmaxf((float)meshConfig.n_assy_cols,
+                                (float)meshConfig.n_assy_rows)
+                        * meshConfig.assy_pitch_m * 1.5f;
+        q_vol_flat.assign(grid.rows * grid.cols, 0.0f);
+        fluxDirty = true;
+        transientHistory.clear();
+        _lastRecordTime = -1.0f;
+    };
+
+    meshPanel.onChange = [&](const MeshConfig& mc) {
+        meshConfig = mc;
+        reinitSimulation(vkCtx, grid, meshConfig,
+                         thermalCompute, neutronCompute,
+                         neutronFlux, simCtrl,
+                         reactorCfg, coolantModel, coolantParams,
+                         params.tempEntree,
+                         thermalAvailable, neutronAvailable);
+        renderOpt.cubeHeight = meshConfig.core_height_m() * 0.1f;
         q_vol_flat.assign(grid.rows * grid.cols, 0.0f);
         fluxDirty = true;
         transientHistory.clear();
@@ -421,7 +454,7 @@ int main() {
 
                 // ── Thermique GPU ───────────────────────────────
                 thermalCompute.step(simCtrl.stepsPerFrame, q_vol_flat);
-                thermalCompute.applyToGrid(grid);
+                thermalCompute.applyToGrid(grid, meshConfig.sub_xy);
 
                 if (coolantPanel.active)
                     coolantModel.update(grid);
@@ -470,7 +503,7 @@ int main() {
         {
             needReset = false;
             thermalCompute.reset(params.tempEntree);
-            thermalCompute.applyToGrid(grid);
+            thermalCompute.applyToGrid(grid, meshConfig.sub_xy);
             for (auto& c : grid.cubes) c.temperature = params.tempEntree;
             simCtrl.simTime   = 0.0f;
             simCtrl.T_min     = params.tempEntree;
@@ -512,7 +545,7 @@ int main() {
             simCtrl.dt_current = thermalCompute.params.dt;
             neutronFlux.init(thermalCompute.params.dt,
                              thermalCompute.params.rho_cp, 2.0f);
-            thermalCompute.applyToGrid(grid);
+            thermalCompute.applyToGrid(grid, meshConfig.sub_xy);
             converged    = false;
             maxDeltaT    = 999.0f;
             simCtrl.simTime = 0.0f;
@@ -546,7 +579,7 @@ int main() {
         ClearBackground({25,25,30,255});
 
         BeginMode3D(camera.get());
-            drawGrid3DAxial(grid, renderOpt);
+            drawGrid3DAxial(grid, renderOpt, meshConfig.sub_xy, meshConfig.sub_z);
             modRenderer.showModerator  = reactorCfg.showModerator;
             modRenderer.showReflector  = reactorCfg.showReflector;
             modRenderer.showControlRod = reactorCfg.showControlRod;
@@ -567,7 +600,8 @@ int main() {
 
         // ── [Mesh2] DimsPanel v2 — touche D ──────────────────
         dimsPanel.update(SW, SH);
-        // (les changements sont gérés via le callback onChange)
+        meshPanel.update(SW, SH);
+        // (les changements sont gérés via les callbacks onChange)
 
         // ── SimPanel — touche S ───────────────────────────────
         bool simChanged = simPanel.update(
@@ -592,7 +626,7 @@ int main() {
         coolantPanel.draw2DOverlay(grid, coolantModel, SW, SH);
         coolantPanel.drawInfoOverlay(coolantModel, SW);
 
-        heatmapPanel.draw(grid, SW, SH);
+        heatmapPanel.draw(grid, meshConfig, SW, SH);
 
         // ── XenonPanel — touche X ─────────────────────────────
         if (neutronAvailable) {
@@ -689,12 +723,12 @@ int main() {
 
             py += 2;
             DrawLine(PX-4, py, PX-4+PW, py, {30,50,100,150}); py += 5;
-            DrawText("[D] Maillage  [X] Xenon", PX, py, 10, {80,110,180,200});
+            DrawText("[D] Resolution  [P] Dimensions  [X] Xenon", PX, py, 10, {80,110,180,200});
         }
 
         // ── Barre de commandes ────────────────────────────────
         DrawText(
-            "[S]Sim [D]Maillage [X]Xenon [C]Caloporteur [F]Fluide "
+            "[S]Sim [D]Resolution [P]Dimensions [X]Xenon [C]Caloporteur [F]Fluide "
             "[H]Heatmap [T]Colormap [G]Grille [W]Fils [R]Reacteur",
             10, SH-20, 11, {80,80,80,255});
 
@@ -711,7 +745,7 @@ int main() {
                      gx+10, gy+30, 12, LIGHTGRAY);
             DrawText("        Cliquer  Appliquer",
                      gx+10, gy+46, 12, {100,220,100,255});
-            DrawText("2. [D]  Configurer le maillage (h_target)",
+            DrawText("2. [D]  Resolution  [P]  Dimensions physiques",
                      gx+10, gy+62, 12, {100,200,255,255});
             DrawText("        Colonnes x rangees x tranches calcules automatiquement",
                      gx+10, gy+78, 11, {80,160,200,255});

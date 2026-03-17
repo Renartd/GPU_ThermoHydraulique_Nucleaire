@@ -1,217 +1,204 @@
 #pragma once
 // ============================================================
-//  DimsPanel.hpp  v3.0
-//  Touche D : ouvrir/fermer
+//  DimsPanel.hpp  v5  —  Touche P : dimensions physiques
 //
-//  Subdivision intra-assemblage :
-//    sub_xy : N divisions en X et Z par assemblage (1..65536)
-//    sub_z  : M divisions axiales (1..1024)
+//  Trois grandeurs indépendantes :
+//    assy_width_m  : largeur NETTE de l'assemblage (boîtier)
+//    assy_gap_m    : jeu inter-assemblage (espace vide)
+//    assy_height_m : hauteur active
 //
-//  Chaque assemblage → sub_xy × sub_xy × sub_z micro-cubes
+//  Pitch = width + gap  (calculé, affiché en lecture seule)
+//  Contrainte anti-collision : width < pitch  toujours vérifiée
 // ============================================================
 #include <raylib.h>
 #include <cstdio>
 #include <cstring>
 #include <cmath>
 #include <functional>
-#include <algorithm>
 #include "../core/GridData.hpp"
 
 struct DimsPanel {
     bool visible = false;
-    char bufSubXY[16] = "8";
-    char bufSubZ [16] = "149";  // 8 × (4.0/0.214) ≈ 149 → cubes réguliers
-    int  activeField = -1;
+    char bufWidth [16] = "0.2070";
+    char bufGap   [16] = "0.0073";
+    char bufHeight[16] = "3.658";
+    int  activeField = -1;  // 0=width  1=gap  2=height
+
     std::function<void(const MeshConfig&)> onChange;
     MeshConfig current;
 
-    void init(const MeshConfig& mc) { current=mc; _sync(); }
+    void init(const MeshConfig& mc) { current = mc; _sync(); }
 
     void _sync() {
-        snprintf(bufSubXY,sizeof(bufSubXY),"%d",current.sub_xy);
-        snprintf(bufSubZ, sizeof(bufSubZ), "%d",current.sub_z);
-        current.update();
+        snprintf(bufWidth,  sizeof(bufWidth),  "%.4f", current.assy_width_m);
+        snprintf(bufGap,    sizeof(bufGap),    "%.4f", current.assy_gap_m);
+        snprintf(bufHeight, sizeof(bufHeight), "%.3f", current.assy_height_m);
     }
 
     bool update(int sw, int sh) {
-        if (IsKeyPressed(KEY_D)) { visible=!visible; activeField=-1; }
+        if (IsKeyPressed(KEY_P)) { visible = !visible; activeField = -1; }
         if (!visible) return false;
 
-        const int PW=440, PH=480;
+        const int PW=400, PH=340;
         const int PX=sw/2-PW/2, PY=sh/2-PH/2;
-        DrawRectangle(PX,PY,PW,PH,{8,10,22,248});
-        DrawRectangleLines(PX,PY,PW,PH,{100,200,100,255});
-        DrawText("MAILLAGE INTRA-ASSEMBLAGE",PX+12,PY+10,14,{100,255,100,255});
-        DrawLine(PX,PY+28,PX+PW,PY+28,{40,80,40,200});
+        DrawRectangle(PX, PY, PW, PH, {8,10,30,248});
+        DrawRectangleLines(PX, PY, PW, PH, {80,140,255,255});
+        DrawText("DIMENSIONS ASSEMBLAGE  [P]", PX+12, PY+10, 13,
+                 {100,180,255,255});
+        DrawLine(PX, PY+28, PX+PW, PY+28, {40,60,120,200});
 
-        Vector2 mouse=GetMousePosition();
-        bool clicked=IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
-        bool changed=false;
-        int y=PY+36;
+        Vector2 mouse = GetMousePosition();
+        bool clicked  = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+        bool changed  = false;
+        int y = PY + 38;
 
-        // Schéma
+        // ── Schéma anti-collision ─────────────────────────────
         {
-            int sx=PX+12,sy=y;
-            int aw=88,ah=66;
-            int N=std::min(current.sub_xy,8);
-            float cw=(float)aw/N,ch=(float)ah/N;
-            for(int i=0;i<N;i++) for(int j=0;j<N;j++){
-                Color cc=((i+j)%2==0)?Color{40,90,40,200}:Color{25,60,35,200};
-                DrawRectangle(sx+(int)(i*cw),sy+(int)(j*ch),(int)cw-1,(int)ch-1,cc);
-            }
-            DrawRectangleLines(sx,sy,aw,ah,{100,220,100,255});
-            char nb[32];
-            snprintf(nb,sizeof(nb),"%dx%d / assy",current.sub_xy,current.sub_xy);
-            DrawText(nb,sx,sy+ah+4,9,{120,200,120,255});
+            int sx=PX+12, sy=y;
+            float scale=180.0f / current.assy_pitch_m;
+            int pw=(int)(current.assy_pitch_m * scale);  // pitch en px
+            int ww=(int)(current.assy_width_m * scale);  // width en px
+            int gw=pw-ww;                                 // gap en px
 
-            int bx=sx+aw+16,bw=22;
-            int Mz=std::min(current.sub_z,16);
-            float ch2=(float)ah/Mz;
-            for(int k=0;k<Mz;k++){
-                Color cc2=(k%2==0)?Color{25,50,90,200}:Color{20,40,75,200};
-                DrawRectangle(bx,sy+(int)(k*ch2),bw-1,(int)ch2-1,cc2);
-            }
-            DrawRectangleLines(bx,sy,bw,ah,{80,160,255,255});
-            snprintf(nb,sizeof(nb),"%d axial",current.sub_z);
-            DrawText(nb,bx,sy+ah+4,9,{100,180,255,200});
+            // Deux assemblages côte à côte
+            DrawRectangle(sx,      sy, ww, 28, {40,80,140,200});
+            DrawRectangle(sx+ww,   sy, gw, 28, {15,15,40,180});   // gap
+            DrawRectangle(sx+pw,   sy, ww, 28, {40,80,140,200});
 
-            DrawText("(chaque carre = 1 cellule elementaire)",
-                     PX+12,sy+ah+18,9,{80,120,80,180});
-            y+=ah+32;
+            DrawRectangleLines(sx,    sy, ww, 28, {80,140,255,255});
+            DrawRectangleLines(sx+pw, sy, ww, 28, {80,140,255,255});
+
+            // Labels
+            char lb[20];
+            snprintf(lb,sizeof(lb),"%.4fm",current.assy_width_m);
+            DrawText(lb, sx+2, sy+8, 9, LIGHTGRAY);
+            if (gw > 14) {
+                snprintf(lb,sizeof(lb),"%.3f",current.assy_gap_m);
+                DrawText(lb, sx+ww+1, sy+8, 8, {180,180,255,200});
+            }
+            // Flèche pitch
+            DrawLine(sx, sy+32, sx+pw, sy+32, {100,160,255,200});
+            DrawLine(sx, sy+29, sx, sy+35, {100,160,255,200});
+            DrawLine(sx+pw, sy+29, sx+pw, sy+35, {100,160,255,200});
+            snprintf(lb,sizeof(lb),"pitch=%.4fm",current.assy_pitch_m);
+            DrawText(lb, sx+pw/2-30, sy+34, 9, {100,160,255,200});
+            y += 48;
         }
 
-        DrawLine(PX+8,y,PX+PW-8,y,{30,60,30,160}); y+=8;
+        DrawLine(PX+8,y,PX+PW-8,y,{30,50,100,160}); y+=8;
 
-        // sub_xy
-        DrawText("Divisions XZ par assemblage :",PX+12,y,12,{180,220,180,255}); y+=17;
-        DrawText("1=1cell  4=16cells  16=256cells  256=65536cells",
-                 PX+12,y,10,{100,140,100,200}); y+=15;
-        changed|=_intField("sub_xy :",bufSubXY,0,PX,y);
-        y+=28;
+        // ── Champs de saisie ──────────────────────────────────
+        changed |= _row("Largeur nette (m) :", bufWidth,  0, PX, y); y+=28;
+        changed |= _row("Jeu inter-assy (m) :", bufGap,    1, PX, y); y+=28;
+        changed |= _row("Hauteur active (m) :", bufHeight, 2, PX, y); y+=28;
 
-        // Presets XZ
-        {
-            int vals[]={1,2,4,8,16,32,64,256,1024,4096};
-            int bx0=PX+12,bw=38,bh=20,gap=3;
-            for(int i=0;i<10;i++){
-                Rectangle br={(float)(bx0+i*(bw+gap)),(float)y,(float)bw,(float)bh};
-                bool hov=CheckCollisionPointRec(mouse,br);
-                bool cur=(current.sub_xy==vals[i]);
-                DrawRectangleRec(br,cur?Color{40,110,40,255}:(hov?Color{30,75,30,255}:Color{18,48,18,200}));
-                DrawRectangleLinesEx(br,1,cur?Color{100,255,100,255}:Color{50,110,50,200});
-                char lb[8]; snprintf(lb,sizeof(lb),"%d",vals[i]);
-                int tw=MeasureText(lb,9);
-                DrawText(lb,(int)br.x+((int)bw-tw)/2,(int)br.y+5,9,LIGHTGRAY);
-                if(clicked&&hov){snprintf(bufSubXY,sizeof(bufSubXY),"%d",vals[i]);changed=true;}
+        // Pitch en lecture seule
+        char pitchStr[32];
+        snprintf(pitchStr,sizeof(pitchStr),"%.4f m  (calculé)",
+                 current.assy_pitch_m);
+        DrawText("Pitch centre/centre :", PX+12, y+5, 11, {140,160,200,200});
+        DrawRectangle(PX+210, y, 150, 22, {15,20,45,200});
+        DrawRectangleLinesEx({(float)(PX+210),(float)y,150,22},1,{40,60,120,180});
+        DrawText(pitchStr, PX+215, y+5, 11, {120,180,255,255});
+        y+=32;
+
+        DrawLine(PX+8,y,PX+PW-8,y,{30,50,100,160}); y+=10;
+
+        // ── Presets ───────────────────────────────────────────
+        DrawText("Standards :", PX+12, y, 11, {120,150,200,200}); y+=16;
+
+        struct Preset {
+            const char* label;
+            float width, gap, height;
+        };
+        // Sources : IAEA-TECDOC, RCC-C, conception réacteurs
+        Preset presets[] = {
+            {"REP 900MW",  0.2070f, 0.0073f, 3.658f},
+            {"REP 1300MW", 0.2136f, 0.0014f, 4.267f},
+            {"REP 1450MW", 0.2136f, 0.0014f, 4.480f},
+            {"CANDU",      0.2800f, 0.0060f, 5.940f},
+            {"RNR-Na",     0.1660f, 0.0060f, 1.000f},
+        };
+        int bw=76, bh=22, gap2=4;
+        for (int i=0;i<5;i++) {
+            Rectangle br={(float)(PX+12+i*(bw+gap2)),(float)y,
+                          (float)bw,(float)bh};
+            bool hov=CheckCollisionPointRec(mouse,br);
+            DrawRectangleRec(br,hov?Color{30,60,130,255}:Color{18,40,90,200});
+            DrawRectangleLinesEx(br,1,{55,100,200,200});
+            int tw=MeasureText(presets[i].label,9);
+            DrawText(presets[i].label,
+                     (int)br.x+((int)bw-tw)/2,(int)br.y+6,9,LIGHTGRAY);
+            if (clicked&&hov) {
+                snprintf(bufWidth, sizeof(bufWidth),  "%.4f",presets[i].width);
+                snprintf(bufGap,   sizeof(bufGap),    "%.4f",presets[i].gap);
+                snprintf(bufHeight,sizeof(bufHeight), "%.3f",presets[i].height);
+                changed=true;
             }
-            y+=26;
         }
+        y+=30;
 
-        DrawLine(PX+8,y,PX+PW-8,y,{30,50,80,160}); y+=8;
+        if (changed) { _apply(); if (onChange) onChange(current); }
 
-        // sub_z
-        DrawText("Divisions axiales Y :",PX+12,y,12,{180,200,255,255}); y+=17;
-        changed|=_intField("sub_z  :",bufSubZ,1,PX,y);
-        y+=28;
+        // Infos cœur
         {
-            int vals[]={4,8,16,32,64,128,256,512};
-            int bx0=PX+12,bw=38,bh=20,gap=3;
-            for(int i=0;i<8;i++){
-                Rectangle br={(float)(bx0+i*(bw+gap)),(float)y,(float)bw,(float)bh};
-                bool hov=CheckCollisionPointRec(mouse,br);
-                bool cur=(current.sub_z==vals[i]);
-                DrawRectangleRec(br,cur?Color{25,55,120,255}:(hov?Color{20,45,95,255}:Color{12,30,70,200}));
-                DrawRectangleLinesEx(br,1,cur?Color{80,160,255,255}:Color{35,75,170,200});
-                char lb[8]; snprintf(lb,sizeof(lb),"%d",vals[i]);
-                int tw=MeasureText(lb,9);
-                DrawText(lb,(int)br.x+((int)bw-tw)/2,(int)br.y+5,9,LIGHTGRAY);
-                if(clicked&&hov){snprintf(bufSubZ,sizeof(bufSubZ),"%d",vals[i]);changed=true;}
-            }
-            y+=26;
-        }
-
-        if(changed){ _applyBuffers(); if(onChange) onChange(current); }
-
-        // Résultats
-        DrawLine(PX+8,y,PX+PW-8,y,{30,60,30,160}); y+=8;
-        char buf[128];
-
-        snprintf(buf,sizeof(buf),"Cellule : %.5fm x %.5fm x %.4fm",
-                 current.dx,current.dz,current.dy);
-        DrawText(buf,PX+12,y,11,{160,200,160,255}); y+=15;
-
-        long long tot=current.total3d();
-        Color tc=tot<50000LL?Color{100,220,100,255}:
-                 tot<1000000LL?Color{255,200,60,255}:Color{255,100,60,255};
-        if(tot<1000000LL)
-            snprintf(buf,sizeof(buf),"Total 3D : %dx%dx%d = %lld cellules",
-                     current.cols,current.rows,current.slices,tot);
-        else
-            snprintf(buf,sizeof(buf),"Total 3D : %dx%dx%d = %.2fM cellules",
-                     current.cols,current.rows,current.slices,(float)tot/1e6f);
-        DrawText(buf,PX+12,y,11,tc); y+=15;
-
-        float mem=current.estimatedMemMB();
-        Color mc2=mem<512?Color{100,220,100,255}:
-                  mem<4096?Color{255,200,60,255}:Color{255,80,60,255};
-        snprintf(buf,sizeof(buf),"Memoire GPU estimee : %.0f Mo  (%.1f Go)",mem,mem/1024.f);
-        DrawText(buf,PX+12,y,11,mc2); y+=15;
-
-        Color arc=current.aspectOK()?Color{100,220,100,255}:Color{255,120,60,255};
-        snprintf(buf,sizeof(buf),"Rapport d aspect : %.2f  %s",
-                 current.aspect_ratio,current.aspectOK()?"OK":"DEGRADE!");
-        DrawText(buf,PX+12,y,11,arc); y+=15;
-
-        if(current.gpuRequired()){
-            DrawRectangle(PX+8,y,PW-16,18,{60,20,0,200});
-            DrawText("GPU REQUIS pour ce maillage",PX+14,y+3,11,{255,160,60,255});
-            y+=22;
+            char buf[80];
+            snprintf(buf,sizeof(buf),
+                "Coeur : %.3fm × %.3fm × %.3fm  |  %d assy",
+                current.core_width_m(), current.core_depth_m(),
+                current.core_height_m(),
+                current.n_assy_cols * current.n_assy_rows);
+            DrawText(buf, PX+12, y, 10, {100,140,200,200}); y+=14;
         }
 
         // Fermer
         Rectangle cr={(float)(PX+PW-62),(float)(PY+PH-34),56,26};
         bool ov=CheckCollisionPointRec(mouse,cr);
-        DrawRectangleRec(cr,ov?Color{120,40,40,255}:Color{70,25,25,200});
-        DrawRectangleLinesEx(cr,1,{200,80,80,255});
+        DrawRectangleRec(cr,ov?Color{100,40,40,255}:Color{65,22,22,200});
+        DrawRectangleLinesEx(cr,1,{180,70,70,255});
         DrawText("Fermer",PX+PW-56,PY+PH-28,11,LIGHTGRAY);
-        if(clicked&&ov) visible=false;
+        if (clicked&&ov) visible=false;
 
         return changed;
     }
 
 private:
-    bool _intField(const char* label, char* buf, int id, int PX, int y){
-        DrawText(label,PX+12,y+5,11,{160,190,160,255});
+    bool _row(const char* label, char* buf, int id, int PX, int y) {
+        DrawText(label, PX+12, y+5, 11, {160,190,220,255});
         Rectangle r={(float)(PX+210),(float)y,110,22};
         bool isA=(activeField==id);
         Vector2 mouse=GetMousePosition();
         bool clicked=IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
-        DrawRectangleRec(r,isA?Color{20,50,20,255}:Color{12,32,16,200});
-        DrawRectangleLinesEx(r,1,isA?Color{80,200,80,255}:Color{45,110,50,200});
+        DrawRectangleRec(r,isA?Color{15,35,80,255}:Color{10,22,55,200});
+        DrawRectangleLinesEx(r,1,isA?Color{80,160,255,255}:Color{40,80,180,200});
         DrawText(buf,(int)r.x+5,(int)r.y+5,11,LIGHTGRAY);
-        if(clicked){
-            if(CheckCollisionPointRec(mouse,r)) activeField=id;
-            else if(activeField==id) activeField=-1;
+        if (clicked) {
+            if (CheckCollisionPointRec(mouse,r)) activeField=id;
+            else if (activeField==id) activeField=-1;
         }
-        if(isA){
+        if (isA) {
             int key=GetCharPressed(),len=(int)strlen(buf);
-            while(key>0){
-                if(len<10&&key>='0'&&key<='9'){buf[len]=(char)key;buf[len+1]='\0';}
+            while (key>0) {
+                if (len<12&&(key>='0'&&key<='9'||key=='.'))
+                    {buf[len]=(char)key;buf[len+1]='\0';}
                 key=GetCharPressed();
             }
-            if(IsKeyPressed(KEY_BACKSPACE)&&len>0) buf[len-1]='\0';
-            if(IsKeyPressed(KEY_ENTER)||IsKeyPressed(KEY_TAB)){
+            if (IsKeyPressed(KEY_BACKSPACE)&&len>0) buf[len-1]='\0';
+            if (IsKeyPressed(KEY_ENTER)||IsKeyPressed(KEY_TAB)){
                 activeField=-1; return true;
             }
         }
         return false;
     }
 
-    void _applyBuffers(){
-        int sxy=atoi(bufSubXY), sz=atoi(bufSubZ);
-        if(sxy>=1&&sxy<=65536) current.sub_xy=sxy;
-        if(sz >=1&&sz <=1024)  current.sub_z =sz;
-        current.update();
+    void _apply() {
+        float w=(float)atof(bufWidth);
+        float g=(float)atof(bufGap);
+        float h=(float)atof(bufHeight);
+        if (w>0.01f&&w<2.0f)  current.assy_width_m  = w;
+        if (g>0.0f  &&g<0.5f) current.assy_gap_m    = g;
+        if (h>0.1f  &&h<30.f) current.assy_height_m = h;
+        current.update();  // recalcule pitch + anti-collision
         _sync();
     }
 };

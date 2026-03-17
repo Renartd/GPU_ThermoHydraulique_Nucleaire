@@ -50,12 +50,18 @@ struct ZoneNode {
 
 // ---------------------------------------------------------------
 //  AssemblyDims : dimensions physiques d'un assemblage (m)
+//
+//  IMPORTANT : pitch = width + spacing (pas réseau centre-à-centre)
+//  Le rendu utilise width pour la taille du cube,
+//  et pitch pour l'espacement des centres → pas de collision.
 // ---------------------------------------------------------------
 struct AssemblyDims {
-    float width   = 0.21f;   // m — largeur assemblage (REP 900MW ≈ 0.214m)
+    float width   = 0.207f;  // m — largeur physique assemblage (< pitch)
     float height  = 4.00f;   // m — hauteur active
-    float depth   = 0.21f;   // m — profondeur assemblage
-    float spacing = 0.01f;   // m — jeu inter-assemblage
+    float depth   = 0.207f;  // m — profondeur physique assemblage
+    float spacing = 0.007f;  // m — jeu inter-assemblage
+    // pitch = width + spacing (calculé, pas stocké)
+    float pitch() const { return width + spacing; }
 };
 
 // ---------------------------------------------------------------
@@ -81,8 +87,18 @@ struct AssemblyDims {
 // ---------------------------------------------------------------
 struct MeshConfig {
     // ── Dimensions physiques d'un assemblage (m) ─────────────
-    float assy_pitch_m  = 0.214f;   // largeur/profondeur assemblage + jeu
-    float assy_height_m = 4.00f;    // hauteur active
+    // assy_width_m  : taille NETTE de l'assemblage (boîtier seul)
+    // assy_gap_m    : jeu inter-assemblage (espace vide entre deux boîtiers)
+    // assy_pitch_m  : pas centre-à-centre = assy_width_m + assy_gap_m  (calculé)
+    // assy_pitch_m  = assy_width_m + assy_gap_m  (pas réseau centre-à-centre)
+    // assy_width_m  = dimension physique nette de l'assemblage (boîtier)
+    // assy_gap_m    = jeu inter-assemblage (espace vide entre deux boîtiers)
+    // COLLISION IMPOSSIBLE : les cubes font assy_width_m,
+    //   les centres sont espacés de assy_pitch_m = width + gap
+    float assy_width_m  = 0.2070f;  // m — largeur nette REP 900MW
+    float assy_gap_m    = 0.0073f;  // m — jeu inter-assemblage REP 900MW
+    float assy_height_m = 4.00f;    // m — hauteur active
+    float assy_pitch_m  = 0.2143f;  // m — CALCULÉ : assy_width_m + assy_gap_m
 
     // ── Nombre d'assemblages dans la grille de chargement ────
     int n_assy_cols = 11;   // rempli depuis AssemblageLoader
@@ -107,14 +123,18 @@ struct MeshConfig {
     void update() {
         sub_xy = std::max(1, sub_xy);
         sub_z  = std::max(1, sub_z);
+        assy_gap_m   = std::max(0.001f, assy_gap_m);   // jeu minimum 1mm
+        // Contrainte anti-collision : width < pitch (toujours respecté)
+        assy_width_m = std::min(assy_width_m, assy_pitch_m - 0.001f);
+        assy_pitch_m = assy_width_m + assy_gap_m;       // recalcul pitch
 
         cols   = n_assy_cols * sub_xy;
         rows   = n_assy_rows * sub_xy;
         slices = sub_z;
 
-        dx = assy_pitch_m  / (float)sub_xy;
+        dx = assy_pitch_m  / (float)sub_xy;  // pas physique cellule XZ
         dz = assy_pitch_m  / (float)sub_xy;
-        dy = assy_height_m / (float)sub_z;
+        dy = assy_height_m / (float)sub_z;   // pas physique cellule Y
 
         float mx = std::max({dx/dz, dz/dx, dx/dy, dy/dx, dz/dy, dy/dz});
         aspect_ratio = mx;
@@ -189,10 +209,10 @@ struct GridData {
         core_depth_m  = mc.core_depth_m();
 
         // Dimensions rendu = pitch assemblage (inchangé)
-        dims.width   = mc.assy_pitch_m;
+        dims.width   = mc.assy_width_m;    // taille NETTE — pas le pitch
         dims.height  = mc.assy_height_m;
-        dims.depth   = mc.assy_pitch_m;
-        dims.spacing = 0.002f;
+        dims.depth   = mc.assy_width_m;
+        dims.spacing = mc.assy_gap_m;       // jeu réel inter-assemblage
     }
 
     // ── Totaux ───────────────────────────────────────────────
@@ -229,7 +249,11 @@ struct GridData {
     void rebuildPositions() {
         // Les cubes sont positionnés à l'échelle ASSEMBLAGE
         // (dims.width = assy_pitch, indépendant de la subdivision physique)
-        float step = dims.width + dims.spacing;
+        // Le pas est le PITCH (centre-à-centre), pas width+spacing
+        // dims.width   = largeur nette  (taille visuelle du cube)
+        // dims.spacing = jeu            (espace vide visible entre cubes)
+        // step         = pitch = width + spacing (distance entre centres)
+        float step = dims.width + dims.spacing;  // = assy_pitch_m
         int n_cols = 0, n_rows = 0;
         for (const auto& c : cubes) {
             n_cols = std::max(n_cols, c.col_idx + 1);
@@ -244,7 +268,11 @@ struct GridData {
     }
 
     Vector3 cellPos(int row_, int col_) const {
-        float step = dims.width + dims.spacing;
+        // Le pas est le PITCH (centre-à-centre), pas width+spacing
+        // dims.width   = largeur nette  (taille visuelle du cube)
+        // dims.spacing = jeu            (espace vide visible entre cubes)
+        // step         = pitch = width + spacing (distance entre centres)
+        float step = dims.width + dims.spacing;  // = assy_pitch_m
         return { col_ * step - offsetX, 0.0f, row_ * step - offsetZ };
     }
 
