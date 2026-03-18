@@ -203,6 +203,7 @@ public:
     // --------------------------------------------------------
     void cleanup() {
         if (!_ctx) return;
+        vkDeviceWaitIdle(_ctx->device);  // attendre la fin du GPU avant de libérer
         auto del = [&](VkBuffer b, VkDeviceMemory m) {
             if (b) vkDestroyBuffer(_ctx->device, b, nullptr);
             if (m) vkFreeMemory(_ctx->device, m, nullptr);
@@ -395,6 +396,12 @@ private:
     }
 
     void createDescriptors() {
+        // Libérer les anciens descriptor sets si existants (reinit)
+        if (_descSetAB != VK_NULL_HANDLE) {
+            VkDescriptorSet old_sets[2] = {_descSetAB, _descSetBA};
+            vkFreeDescriptorSets(_ctx->device, _ctx->descriptorPool, 2, old_sets);
+            _descSetAB = _descSetBA = VK_NULL_HANDLE;
+        }
         VkDescriptorSetLayout layouts[2] = {_descSetLayout, _descSetLayout};
         VkDescriptorSetAllocateInfo ai{};
         ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
