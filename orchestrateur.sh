@@ -54,7 +54,7 @@ echo "[1/2] Solveur d'assemblage..."
 echo "      (réponds aux questions pour configurer le cœur)"
 echo ""
 
-cd "$SCRIPT_DIR/assemblage_solver/code_c"
+cd "$SCRIPT_DIR/assemblage_solver/nuclear/code_c"
 ./assemblage_solver
 
 # Vérifier que Assemblage.txt a bien été écrit
