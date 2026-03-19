@@ -163,10 +163,12 @@ int main() {
         std::cerr << "Fichier introuvable : " << gridPath << "\n"; return 1; } }
 
     ReactorParams params = ReactorParams::lireDepuisFichier(gridPath);
-    params.saisirConsole();
-    std::cout << "Sauvegarder ? (o/n) : ";
-    std::string rep; std::getline(std::cin, rep);
-    if (rep == "o" || rep == "O") params.sauvegarder(gridPath);
+    // Paramètres lus depuis Assemblage.txt (générés par assemblage_solver)
+    // Pas d'interaction console — tout vient du fichier
+    std::cout << "[Main] Paramètres chargés depuis " << gridPath << "\n";
+    std::cout << "  enrichissement=" << params.enrichissement
+              << "  T_entree=" << params.tempEntree
+              << "  T_sortie=" << params.tempSortie << "\n";
 
     // ── Chargement grille ────────────────────────────────────
     auto raw = AssemblageLoader::load(gridPath);
@@ -223,6 +225,17 @@ int main() {
     reactorCfg.moderateur  = params.moderateur;
     reactorCfg.puissance   = params.puissance;
     reactorCfg.autoEnrich  = false;
+
+    // Détecter le type réacteur depuis la chaîne lue dans Assemblage.txt
+    if      (params.reacteurStr == "REP")    reactorCfg.reactorType = ReactorType::REP;
+    else if (params.reacteurStr == "CANDU")  reactorCfg.reactorType = ReactorType::CANDU;
+    else if (params.reacteurStr == "RNR_NA") reactorCfg.reactorType = ReactorType::RNR_NA;
+    else if (params.reacteurStr == "RNR_PB") reactorCfg.reactorType = ReactorType::RNR_PB;
+    else if (params.reacteurStr == "RHT")    reactorCfg.reactorType = ReactorType::RHT;
+    else                                      reactorCfg.reactorType = ReactorType::REP;
+
+    std::cout << "[Main] Type réacteur : " << params.reacteurStr
+              << "  Caloporteur : " << params.caloporteurStr << "\n";
 
     ReactorPanel      reactorPanel;
     ModeratorRenderer modRenderer;

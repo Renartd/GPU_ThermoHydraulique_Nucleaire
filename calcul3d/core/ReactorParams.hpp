@@ -8,8 +8,10 @@ struct ReactorParams {
     float enrichissement = 3.5f;
     float moderateur     = 1.0f;
     float puissance      = 100.0f;
-    float tempEntree     = 280.0f;  // °C
-    float tempSortie     = 320.0f;  // °C
+    float tempEntree     = 286.0f;  // °C
+    float tempSortie     = 324.0f;  // °C
+    std::string reacteurStr    = "REP";
+    std::string caloporteurStr = "EAU";
 
     static ReactorParams lireDepuisFichier(const std::string& path) {
         ReactorParams p;
@@ -21,6 +23,8 @@ struct ReactorParams {
             else if (line.rfind("# puissance=",      0) == 0) try { p.puissance      = std::stof(line.substr(12)); } catch(...) {}
             else if (line.rfind("# tempEntree=",     0) == 0) try { p.tempEntree     = std::stof(line.substr(13)); } catch(...) {}
             else if (line.rfind("# tempSortie=",     0) == 0) try { p.tempSortie     = std::stof(line.substr(13)); } catch(...) {}
+            else if (line.rfind("# reacteur=",       0) == 0) { p.reacteurStr   = line.substr(11); }
+            else if (line.rfind("# caloporteur=",    0) == 0) { p.caloporteurStr = line.substr(14); }
         }
         return p;
     }

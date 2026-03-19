@@ -1,16 +1,33 @@
-# enrichissement=5
-# moderateur=1
-# puissance=32
-# tempEntree=280
-# tempSortie=320
-- - - - A A A - - - - 
-- - A A A A A A A - - 
-- A A A A A A A A A - 
-- A A A A A A A A A - 
-A A A A A A A A A A A 
-A A A A A A A A A A A 
-A A A A A A A A A A A 
-- A A A A A A A A A - 
-- A A A A A A A A A - 
-- - A A A A A A A - - 
-- - - - A A A - - - - 
+# ============================================
+# Fichier genere par assemblage_solver
+# ============================================
+#
+# --- Parametres reacteur (lus par le simulateur) ---
+# reacteur=REP
+# enrichissement=4.00
+# moderateur=1.00
+# puissance=100.0
+# tempEntree=286.0
+# tempSortie=324.0
+# caloporteur=EAU
+#
+# Grille d'assemblage
+11
+----BCB----
+--ABABABA--
+-ACACACACA-
+-BACBCBCAB-
+BACBABABCAB
+CBACBABCABC
+BACBABABCAB
+-BACBCBCAB-
+-ACACACACA-
+--ABABABA--
+----BCB----
+
+# Types d'assemblages
+3
+# symbole puissance stock combustible enrich_principal mox_pu mox_u235 mox_u238
+A 1.000000 999 U235 4.000000 0.000000 0.000000 0.000000
+B 2.000000 999 U235 4.000000 0.000000 0.000000 0.000000
+C 3.000000 999 U235 4.000000 0.000000 0.000000 0.000000
