@@ -138,8 +138,6 @@ struct VulkanContext {
         VkPipeline pipeline;
         VK_CHECK_CTX(vkCreateComputePipelines(device, VK_NULL_HANDLE,
                                               1, &cpCI, nullptr, &pipeline));
-        // Le shader module peut être détruit après la création du pipeline
-        // On le garde pour le cleanup — le appelant est responsable
         return pipeline;
     }
 
@@ -173,6 +171,10 @@ struct VulkanContext {
     }
 
 private:
+
+    // ───────────────────────────────────────────────────────────────
+    //  INSTANCE
+    // ───────────────────────────────────────────────────────────────
     void _createInstance() {
         VkApplicationInfo app{};
         app.sType      = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -190,28 +192,51 @@ private:
         VK_CHECK_CTX(vkCreateInstance(&ci, nullptr, &instance));
     }
 
+    // ───────────────────────────────────────────────────────────────
+    //  GPU SELECTION — VERSION ROBUSTE (NVIDIA > Intel > llvmpipe)
+    // ───────────────────────────────────────────────────────────────
     void _pickPhysicalDevice() {
-        uint32_t cnt=0;
+        uint32_t cnt = 0;
         vkEnumeratePhysicalDevices(instance, &cnt, nullptr);
         if (!cnt) throw std::runtime_error("[VkCtx] Aucun GPU Vulkan");
         std::vector<VkPhysicalDevice> devs(cnt);
         vkEnumeratePhysicalDevices(instance, &cnt, devs.data());
 
-        // Préfère un GPU discret
-        physDev = devs[0];
+        VkPhysicalDevice best = VK_NULL_HANDLE;
+        int bestScore = -1;
+
         for (auto d : devs) {
             VkPhysicalDeviceProperties p;
             vkGetPhysicalDeviceProperties(d, &p);
-            if (p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
-                physDev = d;
-                VkPhysicalDeviceProperties pp;
-                vkGetPhysicalDeviceProperties(physDev, &pp);
-                std::cout << "[VkCtx] GPU : " << pp.deviceName << "\n";
-                break;
+
+            int score = 0;
+
+            if (p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
+                score = 1000;
+            else if (p.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU)
+                score = 500;
+            else
+                score = 10;
+
+            if (score > bestScore) {
+                bestScore = score;
+                best = d;
             }
         }
+
+        if (best == VK_NULL_HANDLE)
+            throw std::runtime_error("[VkCtx] Aucun GPU compatible trouvé !");
+
+        physDev = best;
+
+        VkPhysicalDeviceProperties pp;
+        vkGetPhysicalDeviceProperties(physDev, &pp);
+        std::cout << "[VkCtx] GPU sélectionné : " << pp.deviceName << "\n";
     }
 
+    // ───────────────────────────────────────────────────────────────
+    //  DEVICE + QUEUE
+    // ───────────────────────────────────────────────────────────────
     void _createDevice() {
         uint32_t qfCnt=0;
         vkGetPhysicalDeviceQueueFamilyProperties(physDev, &qfCnt, nullptr);
@@ -241,6 +266,9 @@ private:
         vkGetDeviceQueue(device, queueFamily, 0, &computeQueue);
     }
 
+    // ───────────────────────────────────────────────────────────────
+    //  COMMAND POOL
+    // ───────────────────────────────────────────────────────────────
     void _createCommandPool() {
         VkCommandPoolCreateInfo ci{};
         ci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -249,18 +277,16 @@ private:
         VK_CHECK_CTX(vkCreateCommandPool(device, &ci, nullptr, &cmdPool));
     }
 
+    // ───────────────────────────────────────────────────────────────
+    //  DESCRIPTOR POOL
+    // ───────────────────────────────────────────────────────────────
     void _createDescriptorPool() {
-        // FVM pipeline : 16 STORAGE + 1 UNIFORM × 2 sets (AB+BA)
-        // Reduce pipeline : 5 STORAGE + 1 UNIFORM × 2 sets (A+B)
-        // → Total : (16×2 + 5×2) = 42 STORAGE + (1×2 + 1×2) = 4 UNIFORM
-        // On double pour marge
         VkDescriptorPoolSize sizes[] = {
             { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 200 },
             { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,  40 },
         };
         VkDescriptorPoolCreateInfo ci{};
         ci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        // FREE_DESCRIPTOR_SET_BIT permet de libérer les sets individuellement
         ci.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
         ci.maxSets       = 40;
         ci.poolSizeCount = 2;
@@ -268,7 +294,6 @@ private:
         VK_CHECK_CTX(vkCreateDescriptorPool(device, &ci, nullptr, &descriptorPool));
     }
 
-    // Réinitialise le pool de descripteurs (libère tous les sets alloués)
     void resetDescriptorPool() {
         if (descriptorPool)
             vkResetDescriptorPool(device, descriptorPool, 0);

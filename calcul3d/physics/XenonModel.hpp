@@ -61,6 +61,8 @@
 #include <iostream>
 #include <algorithm>
 #include "../physics/NeutronCrossSection.hpp"
+#include <cstdint>
+
 
 struct XenonModel {
 
