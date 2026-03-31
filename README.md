@@ -1,5 +1,3 @@
----
-
 # Simulateur Neutronique‑Thermique 3D  
 **Modélisation temps réel de réacteurs nucléaires avec accélération GPU Vulkan**
 
