@@ -559,7 +559,7 @@ private:
     VkDeviceMemory _mPrecA=VK_NULL_HANDLE, _mPrecB=VK_NULL_HANDLE;
 
     // ── XS SoA (HOST_VISIBLE|COHERENT — upload chaque frame) ──
-    VkBuffer       _bD1=VK_NULL_HANDLE,    _mD1_mem=VK_NULL_HANDLE;
+    VkBuffer       _bD1=VK_NULL_HANDLE;
     VkDeviceMemory _mD1=VK_NULL_HANDLE;
     VkBuffer       _bD2=VK_NULL_HANDLE;       VkDeviceMemory _mD2=VK_NULL_HANDLE;
     VkBuffer       _bSR1=VK_NULL_HANDLE;      VkDeviceMemory _mSR1=VK_NULL_HANDLE;
@@ -628,33 +628,36 @@ private:
         _ctx->createBuffer(szP, STO|TRA, DEV, _bPrecA, _mPrecA);
         _ctx->createBuffer(szP, STO|TRA, DEV, _bPrecB, _mPrecB);
 
-        // XS SoA HOST_VISIBLE
-        _ctx->createBuffer(sz, STO|HOST, HOST, _bD1,   _mD1);
-        _ctx->createBuffer(sz, STO|HOST, HOST, _bD2,   _mD2);
-        _ctx->createBuffer(sz, STO|HOST, HOST, _bSR1,  _mSR1);
-        _ctx->createBuffer(sz, STO|HOST, HOST, _bSR2,  _mSR2);
-        _ctx->createBuffer(sz, STO|HOST, HOST, _bSS12, _mSS12);
-        _ctx->createBuffer(sz, STO|HOST, HOST, _bnSF1, _mnSF1);
-        _ctx->createBuffer(sz, STO|HOST, HOST, _bnSF2, _mnSF2);
-        _ctx->createBuffer(sz, STO|HOST, HOST, _bchi1, _mchi1);
-        _ctx->createBuffer(sz, STO|HOST, HOST, _bchi2, _mchi2);
+        // XS SoA HOST_VISIBLE (usage=STO uniquement, flags mémoire=HOST)
+        _ctx->createBuffer(sz, STO, HOST, _bD1,   _mD1);
+        _ctx->createBuffer(sz, STO, HOST, _bD2,   _mD2);
+        _ctx->createBuffer(sz, STO, HOST, _bSR1,  _mSR1);
+        _ctx->createBuffer(sz, STO, HOST, _bSR2,  _mSR2);
+        _ctx->createBuffer(sz, STO, HOST, _bSS12, _mSS12);
+        _ctx->createBuffer(sz, STO, HOST, _bnSF1, _mnSF1);
+        _ctx->createBuffer(sz, STO, HOST, _bnSF2, _mnSF2);
+        _ctx->createBuffer(sz, STO, HOST, _bchi1, _mchi1);
+        _ctx->createBuffer(sz, STO, HOST, _bchi2, _mchi2);
 
         // Zone HOST_VISIBLE
-        _ctx->createBuffer(szZ, STO|HOST, HOST, _bZone,   _mZone);
+        _ctx->createBuffer(szZ, STO, HOST, _bZone, _mZone);
 
         // Params uniform HOST_VISIBLE
-        _ctx->createBuffer(sizeof(NeutronParams), UNI|HOST, HOST,
+        _ctx->createBuffer(sizeof(NeutronParams), UNI, HOST,
                            _bParams, _mParams);
 
-        // Readback phi HOST_VISIBLE
-        _ctx->createBuffer(sz, STO|TRA|HOST, HOST, _bRBphi1, _mRBphi1);
-        _ctx->createBuffer(sz, STO|TRA|HOST, HOST, _bRBphi2, _mRBphi2);
+        // Readback phi HOST_VISIBLE (TRA_DST pour recevoir la copie GPU→CPU)
+        _ctx->createBuffer(sz, TRA|VK_BUFFER_USAGE_TRANSFER_DST_BIT, HOST,
+                           _bRBphi1, _mRBphi1);
+        _ctx->createBuffer(sz, TRA|VK_BUFFER_USAGE_TRANSFER_DST_BIT, HOST,
+                           _bRBphi2, _mRBphi2);
 
         // Reduce
         _ctx->createBuffer(szPart, STO|TRA, DEV, _bPartial, _mPartial);
-        _ctx->createBuffer(sizeof(ReduceParams), UNI|HOST, HOST,
+        _ctx->createBuffer(sizeof(ReduceParams), UNI, HOST,
                            _bRedParams, _mRedParams);
-        _ctx->createBuffer(szPart, STO|TRA|HOST, HOST, _bRBreduce, _mRBreduce);
+        _ctx->createBuffer(szPart, TRA|VK_BUFFER_USAGE_TRANSFER_DST_BIT, HOST,
+                           _bRBreduce, _mRBreduce);
 
         // Upload initial
         _uploadXS_SoA();
@@ -988,8 +991,16 @@ private:
         if(_shFVM){vkDestroyShaderModule(dev,_shFVM,nullptr);_shFVM=VK_NULL_HANDLE;}
         if(_shRed){vkDestroyShaderModule(dev,_shRed,nullptr);_shRed=VK_NULL_HANDLE;}
 
-        // Les descriptor sets sont invalidés par la destruction du pool
-        // (le pool lui-même est géré par VulkanContext)
+        // Libérer explicitement les descriptor sets (pool géré par VulkanContext)
+        VkDescriptorSet setsToFree[4] = {_descAB, _descBA, _descRedA, _descRedB};
+        int nFree = 0;
+        for (auto s : setsToFree) if (s != VK_NULL_HANDLE) ++nFree;
+        if (nFree > 0) {
+            std::vector<VkDescriptorSet> valid;
+            for (auto s : setsToFree) if (s != VK_NULL_HANDLE) valid.push_back(s);
+            vkFreeDescriptorSets(dev, _ctx->descriptorPool,
+                                 (uint32_t)valid.size(), valid.data());
+        }
         _descAB=VK_NULL_HANDLE; _descBA=VK_NULL_HANDLE;
         _descRedA=VK_NULL_HANDLE; _descRedB=VK_NULL_HANDLE;
 
