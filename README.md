@@ -1,9 +1,7 @@
 # Simulateur Neutronique‑Thermique 3D  
 **Modélisation temps réel de réacteurs nucléaires avec accélération GPU Vulkan**
 
-Ce dépôt contient un simulateur couplé neutronique‑thermique. 
-Le code implémente un solveur neutronique deux groupes, un modèle thermique tridimensionnel, la cinétique Xénon/Iode, ainsi qu’un pipeline de calcul massivement parallèle basé sur Vulkan.
-
+Ce dépôt contient un simulateur couplé neutronique‑thermique.
 Développé par **Eloi Kress**.
 
 ---
