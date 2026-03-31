@@ -1,63 +1,25 @@
-###############################################
-# BUILD SYSTEM (généré automatiquement)
-###############################################
-build/
-build-*/
-cmake-build-*/
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
+# --- Binaires solveur C ---
+assemblage_solver/nuclear/code_c/assemblage_solver
+assemblage_solver/nuclear/code_c/prog
+assemblage_solver/nuclear/code_c/programme
 
-###############################################
-# BINAIRES (générés, jamais versionnés)
-###############################################
-*.exe
-*.out
-*.app
-viewer3d
-vulkan_compute
+# --- Fichiers générés solveur ---
+assemblage_solver/nuclear/code_c/assemblage.txt
+assemblage_solver/nuclear/code_c/diagnostic_complet.txt
 
-###############################################
-# OBJETS COMPILÉS (générés)
-###############################################
-*.o
-*.obj
-*.lo
-*.la
-*.a
-*.so
-*.dll
-*.dylib
+# --- Archives ---
+*.zip
 
-###############################################
-# FICHIERS TEMPORAIRES D'ÉDITEURS
-###############################################
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
+# --- Binaires simulateur C++ ---
+calcul3d/viewer_raylib
 
-###############################################
-# LOGS
-###############################################
-*.log
+# --- Shaders compilés ---
+compute/shaders/*.spv
 
-###############################################
-# FICHIERS GÉNÉRÉS PAR LE COMPILATEUR
-###############################################
-*.d
-*.mod
-*.pch
-
-###############################################
-# PYTHON (si tu utilises des scripts)
-###############################################
+# --- Python cache ---
 __pycache__/
 *.pyc
 
-###############################################
-# FICHIERS SYSTÈME
-###############################################
-.DS_Store
-Thumbs.db
+# --- Build temp ---
+build/
+out/
