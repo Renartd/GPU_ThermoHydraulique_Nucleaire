@@ -6,7 +6,7 @@ Développé par **Eloi Kress**.
 
 ---
 
-## 📄 Documentation & Guide utilisateur
+## Documentation & Guide utilisateur
 
 La documentation complète du simulateur (description des modèles physiques, guide d'utilisation, architecture logicielle) est disponible dans :
 
@@ -22,7 +22,7 @@ calcul3d/documentation_Simulation_Nucleaire_Eloi_KRESS.docx
 
 ---
 
-## 🚀 Installation et lancement
+## Installation et lancement
 
 ### Prérequis
 
@@ -39,7 +39,7 @@ git clone --recurse-submodules https://github.com/Renartd/GPU_ThermoHydraulique_
 cd GPU_ThermoHydraulique_Nucleaire
 ```
 
-> ⚠️ Le `--recurse-submodules` est **obligatoire** pour récupérer le solveur d'assemblage.  
+> Le `--recurse-submodules` est **obligatoire** pour récupérer le solveur d'assemblage.  
 > Si vous avez oublié ce flag :
 > ```bash
 > git submodule update --init --recursive
@@ -61,7 +61,7 @@ make build    # compile le solveur C + le simulateur C++
 
 ---
 
-## 🗂️ Structure du dépôt
+## Structure du dépôt
 
 ```
 GPU_ThermoHydraulique_Nucleaire/
@@ -87,7 +87,7 @@ GPU_ThermoHydraulique_Nucleaire/
 
 ---
 
-## ⌨️ Raccourcis clavier principaux
+## Raccourcis clavier principaux
 
 | Touche | Action |
 |--------|--------|
@@ -105,7 +105,7 @@ GPU_ThermoHydraulique_Nucleaire/
 
 ---
 
-## ⚙️ Réacteurs supportés
+## Réacteurs supportés
 
 | Type | Combustible | Caloporteur | Modérateur |
 |------|-------------|-------------|------------|
@@ -117,7 +117,7 @@ GPU_ThermoHydraulique_Nucleaire/
 
 ---
 
-## 🔧 Dépendances
+## Dépendances
 
 | Bibliothèque | Usage |
 |---|---|
@@ -128,7 +128,7 @@ GPU_ThermoHydraulique_Nucleaire/
 
 ---
 
-## 🔄 Mettre à jour le solveur d'assemblage
+## Mettre à jour le solveur d'assemblage
 
 ```bash
 cd assemblage_solver
@@ -141,6 +141,6 @@ git push
 
 ---
 
-## 📝 Licence
+## Licence
 
 Projet académique — Eloi Kress.

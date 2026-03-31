@@ -22,11 +22,6 @@ else
 endif
 
 # ── Submodules ───────────────────────────────────────────────
-install:
-	@echo "=== Initialisation submodules ==="
-	git submodule update --init --recursive
-	@echo "OK"
-
 # ── Solveur C ────────────────────────────────────────────────
 build-solver:
 	@echo "=== Compilation solveur (C) ==="
@@ -40,7 +35,7 @@ build-sim:
 	@cd $(SIM_DIR) && ./build.sh
 
 # ── Build complet ────────────────────────────────────────────
-build: install build-solver build-sim
+build: build-solver build-sim
 	@echo ""
 	@echo "=== Build terminé ==="
 	@echo "Lance : make run"
