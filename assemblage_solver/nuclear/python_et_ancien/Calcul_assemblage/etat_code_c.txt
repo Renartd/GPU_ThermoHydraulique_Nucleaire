@@ -1,0 +1,609 @@
+===== ./nuclear/code_c/MonteCarlo.h =====
+#ifndef MONTE_CARLO_H
+#define MONTE_CARLO_H
+
+void monte_carlo_metropolis(Grid *G, TypeAssemblage *types, int nb_types,
+                            int iterations, double T,
+                            double **Tfield);
+
+void recuit_simule(Grid *G, TypeAssemblage *types, int nb_types,
+                   int iterations, double T0, double alpha,
+                   double **Tfield);
+
+#endif
+
+===== ./nuclear/code_c/main.c =====
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include "Grid.h"
+#include "TypesAssemblage.h"
+#include "MonteCarlo.h"
+
+static double **alloc_double_grid(int n) {
+    double **m = malloc(n * sizeof(double *));
+    for (int i = 0; i < n; i++)
+        m[i] = malloc(n * sizeof(double));
+    return m;
+}
+
+static void free_double_grid(double **m, int n) {
+    for (int i = 0; i < n; i++)
+        free(m[i]);
+    free(m);
+}
+
+int main(void) {
+    srand((unsigned int)time(NULL));
+
+    int rayon;
+    printf("Rayon du cœur (max 25) : ");
+    if (scanf("%d", &rayon) != 1) return 1;
+
+    Grid G = generer_grille_circulaire(rayon);
+
+    printf("\n=== Cœur généré ===\n");
+    afficher_core(G);
+
+    TypeAssemblage types[16];
+    int nb_types = 0;
+    definir_types(types, &nb_types);
+
+    remplir_grille_aleatoire(&G, types, nb_types);
+
+    printf("\n=== Remplissage aléatoire ===\n");
+    afficher_grille(G);
+
+    double **Tfield = alloc_double_grid(G.size);
+
+    double Tmin, Tmax, deltaT, grad_max;
+
+    calculer_carte_thermique(&G, types, nb_types, Tfield);
+    diffusion_thermique(&G, Tfield, 5);
+    evaluer_thermique(&G, Tfield, &Tmin, &Tmax, &deltaT, &grad_max);
+
+    printf("\n=== Carte thermique (ASCII) ===\n");
+    afficher_thermique_ascii(&G, Tfield);
+
+    printf("\n=== Carte thermique (couleur) ===\n");
+    afficher_thermique_couleur(&G, Tfield);
+
+    printf("\n=== Évaluation initiale ===\n");
+    printf("Tmin = %.4f\n", Tmin);
+    printf("Tmax = %.4f\n", Tmax);
+    printf("ΔT   = %.4f\n", deltaT);
+    printf("Gradient max = %.4f\n", grad_max);
+
+    printf("\n=== Monte Carlo (Metropolis) ===\n");
+    monte_carlo_metropolis(&G, types, nb_types, 2000, 0.5, Tfield);
+    afficher_grille(G);
+
+    printf("\n=== Recuit simulé ===\n");
+    recuit_simule(&G, types, nb_types, 5000, 1.0, 0.999, Tfield);
+    afficher_grille(G);
+
+    free_double_grid(Tfield, G.size);
+    free_int_grid(G.core, G.size);
+    free_char_grid(G.g, G.size);
+
+    return 0;
+}
+
+===== ./nuclear/code_c/TypesAssemblage.c =====
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include "Grid.h"
+#include "TypesAssemblage.h"
+
+/* Palette 16 couleurs */
+const char *palette[16] = {
+    "🟥","🟧","🟨","🟩","🟦","🟪","⬛","⬜",
+    "🟫","🟧","🟦","🟩","🟪","🟥","🟨","⬜"
+};
+
+/* Accepte TOUS les caractères possibles */
+int couleur_type(char c) {
+    if (c == '-') return -1;
+    return ((unsigned char)c) % 16;
+}
+
+void definir_types(TypeAssemblage *types, int *nb_types) {
+    printf("Combien de types d’assemblages ? ");
+    if (scanf("%d", nb_types) != 1) exit(1);
+
+    for (int i = 0; i < *nb_types; i++) {
+        printf("Symbole du type %d : ", i+1);
+        scanf(" %c", &types[i].symbole);
+        printf("Puissance thermique du type %c : ", types[i].symbole);
+        scanf("%lf", &types[i].puissance);
+    }
+}
+
+void remplir_grille_aleatoire(Grid *G, TypeAssemblage *types, int nb_types) {
+    for (int i = 0; i < G->size; i++) {
+        for (int j = 0; j < G->size; j++) {
+            if (G->core[i][j]) {
+                int k = rand() % nb_types;
+                G->g[i][j] = types[k].symbole;
+            } else {
+                G->g[i][j] = '-';
+            }
+        }
+    }
+}
+
+void calculer_carte_thermique(Grid *G, TypeAssemblage *types, int nb_types,
+                              double **T) {
+    for (int i = 0; i < G->size; i++) {
+        for (int j = 0; j < G->size; j++) {
+            if (!G->core[i][j]) {
+                T[i][j] = 0.0;
+                continue;
+            }
+            char c = G->g[i][j];
+            double p = 0.0;
+            for (int k = 0; k < nb_types; k++) {
+                if (types[k].symbole == c) {
+                    p = types[k].puissance;
+                    break;
+                }
+            }
+            T[i][j] = p;
+        }
+    }
+}
+
+void diffusion_thermique(Grid *G, double **T, int iterations) {
+    int n = G->size;
+    double **tmp = malloc(n * sizeof(double *));
+    for (int i = 0; i < n; i++)
+        tmp[i] = malloc(n * sizeof(double));
+
+    for (int it = 0; it < iterations; it++) {
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                if (!G->core[i][j]) {
+                    tmp[i][j] = 0.0;
+                    continue;
+                }
+                double sum = T[i][j];
+                int count = 1;
+                if (i > 0 && G->core[i-1][j]) { sum += T[i-1][j]; count++; }
+                if (i < n-1 && G->core[i+1][j]) { sum += T[i+1][j]; count++; }
+                if (j > 0 && G->core[i][j-1]) { sum += T[i][j-1]; count++; }
+                if (j < n-1 && G->core[i][j+1]) { sum += T[i][j+1]; count++; }
+                tmp[i][j] = sum / count;
+            }
+        }
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j < n; j++)
+                T[i][j] = tmp[i][j];
+    }
+
+    for (int i = 0; i < n; i++)
+        free(tmp[i]);
+    free(tmp);
+}
+
+void evaluer_thermique(Grid *G, double **T,
+                       double *Tmin, double *Tmax,
+                       double *deltaT, double *grad_max) {
+    *Tmin = 1e30;
+    *Tmax = -1e30;
+    *grad_max = 0.0;
+
+    int n = G->size;
+
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            if (!G->core[i][j]) continue;
+            double t = T[i][j];
+            if (t < *Tmin) *Tmin = t;
+            if (t > *Tmax) *Tmax = t;
+
+            if (i < n-1 && G->core[i+1][j]) {
+                double g = fabs(T[i+1][j] - t);
+                if (g > *grad_max) *grad_max = g;
+            }
+            if (j < n-1 && G->core[i][j+1]) {
+                double g = fabs(T[i][j+1] - t);
+                if (g > *grad_max) *grad_max = g;
+            }
+        }
+    }
+
+    *deltaT = *Tmax - *Tmin;
+}
+
+/* ASCII thermique */
+void afficher_thermique_ascii(Grid *G, double **T) {
+    double Tmin = 1e30, Tmax = -1e30;
+    int n = G->size;
+
+    for(int i=0;i<n;i++)
+        for(int j=0;j<n;j++)
+            if(G->core[i][j]) {
+                if(T[i][j] < Tmin) Tmin = T[i][j];
+                if(T[i][j] > Tmax) Tmax = T[i][j];
+            }
+
+    const char levels[] = " .:-=+*#%@";
+
+    for(int i=0;i<n;i++) {
+        for(int j=0;j<n;j++) {
+            if(!G->core[i][j]) {
+                printf("  ");
+                continue;
+            }
+            double x = (T[i][j] - Tmin) / (Tmax - Tmin + 1e-9);
+            int idx = (int)(x * 9);
+            printf("%c ", levels[idx]);
+        }
+        printf("\n");
+    }
+}
+
+/* Couleur thermique bleu → rouge */
+void afficher_thermique_couleur(Grid *G, double **T) {
+    double Tmin = 1e30, Tmax = -1e30;
+    int n = G->size;
+
+    for(int i=0;i<n;i++)
+        for(int j=0;j<n;j++)
+            if(G->core[i][j]) {
+                if(T[i][j] < Tmin) Tmin = T[i][j];
+                if(T[i][j] > Tmax) Tmax = T[i][j];
+            }
+
+    const char *thermo[] = {
+        "🔵","🔷","🔹","🟦","🟩","🟨","🟧","🟥"
+    };
+
+    for(int i=0;i<n;i++) {
+        for(int j=0;j<n;j++) {
+            if(!G->core[i][j]) {
+                printf("⬜");
+                continue;
+            }
+            double x = (T[i][j] - Tmin) / (Tmax - Tmin + 1e-9);
+            int idx = (int)(x * 7);
+            printf("%s", thermo[idx]);
+        }
+        printf("\n");
+    }
+}
+
+===== ./nuclear/code_c/TypesAssemblage.h =====
+#ifndef TYPES_ASSEMBLAGE_H
+#define TYPES_ASSEMBLAGE_H
+
+#include "Grid.h"
+
+typedef struct {
+    char symbole;
+    double puissance;
+} TypeAssemblage;
+
+extern const char *palette[16];
+
+int couleur_type(char c);
+
+void definir_types(TypeAssemblage *types, int *nb_types);
+void remplir_grille_aleatoire(Grid *G, TypeAssemblage *types, int nb_types);
+
+void calculer_carte_thermique(Grid *G, TypeAssemblage *types, int nb_types,
+                              double **T);
+
+void diffusion_thermique(Grid *G, double **T, int iterations);
+
+void evaluer_thermique(Grid *G, double **T,
+                       double *Tmin, double *Tmax,
+                       double *deltaT, double *grad_max);
+
+/* Nouveaux affichages */
+void afficher_thermique_ascii(Grid *G, double **T);
+void afficher_thermique_couleur(Grid *G, double **T);
+
+#endif
+
+===== ./nuclear/code_c/Grid.h =====
+#ifndef GRID_H
+#define GRID_H
+
+typedef struct {
+    int **core;   // 1 = cœur, 0 = vide
+    char **g;     // symbole d’assemblage ou '-'
+    int rayon;
+    int size;
+} Grid;
+
+int **alloc_int_grid(int n);
+char **alloc_char_grid(int n);
+void free_int_grid(int **grid, int n);
+void free_char_grid(char **grid, int n);
+
+Grid generer_grille_circulaire(int rayon);
+void generer_cercle(Grid *G);
+void corriger_extremites(Grid *G);
+
+void afficher_core(Grid G);
+void afficher_grille(Grid G);
+
+#endif
+
+===== ./nuclear/code_c/MonteCarlo.c =====
+#include <stdlib.h>
+#include <math.h>
+#include <stdio.h>
+#include "Grid.h"
+#include "TypesAssemblage.h"
+#include "MonteCarlo.h"
+
+static double rand01(void) {
+    return rand() / (double)RAND_MAX;
+}
+
+static void echanger_assemblages(Grid *G, int i1, int j1, int i2, int j2) {
+    char tmp = G->g[i1][j1];
+    G->g[i1][j1] = G->g[i2][j2];
+    G->g[i2][j2] = tmp;
+}
+
+void monte_carlo_metropolis(Grid *G, TypeAssemblage *types, int nb_types,
+                            int iterations, double T,
+                            double **Tfield) {
+    double Tmin, Tmax, deltaT, grad_max;
+
+    calculer_carte_thermique(G, types, nb_types, Tfield);
+    diffusion_thermique(G, Tfield, 5);
+    evaluer_thermique(G, Tfield, &Tmin, &Tmax, &deltaT, &grad_max);
+
+    for (int it = 0; it < iterations; it++) {
+        int i1, j1, i2, j2;
+        do {
+            i1 = rand() % G->size;
+            j1 = rand() % G->size;
+        } while (!G->core[i1][j1]);
+
+        do {
+            i2 = rand() % G->size;
+            j2 = rand() % G->size;
+        } while (!G->core[i2][j2]);
+
+        echanger_assemblages(G, i1, j1, i2, j2);
+
+        calculer_carte_thermique(G, types, nb_types, Tfield);
+        diffusion_thermique(G, Tfield, 5);
+
+        double Tmin2, Tmax2, deltaT2, grad2;
+        evaluer_thermique(G, Tfield, &Tmin2, &Tmax2, &deltaT2, &grad2);
+
+        double dE = deltaT2 - deltaT;
+
+        if (dE < 0) {
+            deltaT = deltaT2;
+        } else {
+            double p = exp(-dE / T);
+            double r = rand01();
+            if (r < p) {
+                deltaT = deltaT2;
+            } else {
+                echanger_assemblages(G, i1, j1, i2, j2);
+            }
+        }
+    }
+
+    calculer_carte_thermique(G, types, nb_types, Tfield);
+    diffusion_thermique(G, Tfield, 5);
+    evaluer_thermique(G, Tfield, &Tmin, &Tmax, &deltaT, &grad_max);
+
+    printf("Après Monte Carlo :\n");
+    printf("Tmin = %.4f\n", Tmin);
+    printf("Tmax = %.4f\n", Tmax);
+    printf("ΔT   = %.4f\n", deltaT);
+    printf("Gradient max = %.4f\n", grad_max);
+}
+
+void recuit_simule(Grid *G, TypeAssemblage *types, int nb_types,
+                   int iterations, double T0, double alpha,
+                   double **Tfield) {
+    double Tmin, Tmax, deltaT, grad_max;
+    double T = T0;
+
+    calculer_carte_thermique(G, types, nb_types, Tfield);
+    diffusion_thermique(G, Tfield, 5);
+    evaluer_thermique(G, Tfield, &Tmin, &Tmax, &deltaT, &grad_max);
+
+    for (int it = 0; it < iterations; it++) {
+        int i1, j1, i2, j2;
+        do {
+            i1 = rand() % G->size;
+            j1 = rand() % G->size;
+        } while (!G->core[i1][j1]);
+
+        do {
+            i2 = rand() % G->size;
+            j2 = rand() % G->size;
+        } while (!G->core[i2][j2]);
+
+        echanger_assemblages(G, i1, j1, i2, j2);
+
+        calculer_carte_thermique(G, types, nb_types, Tfield);
+        diffusion_thermique(G, Tfield, 5);
+
+        double Tmin2, Tmax2, deltaT2, grad2;
+        evaluer_thermique(G, Tfield, &Tmin2, &Tmax2, &deltaT2, &grad2);
+
+        double dE = deltaT2 - deltaT;
+
+        if (dE < 0) {
+            deltaT = deltaT2;
+        } else {
+            double p = exp(-dE / T);
+            double r = rand01();
+            if (r < p) {
+                deltaT = deltaT2;
+            } else {
+                echanger_assemblages(G, i1, j1, i2, j2);
+            }
+        }
+
+        T *= alpha;
+    }
+
+    calculer_carte_thermique(G, types, nb_types, Tfield);
+    diffusion_thermique(G, Tfield, 5);
+    evaluer_thermique(G, Tfield, &Tmin, &Tmax, &deltaT, &grad_max);
+
+    printf("Après recuit simulé :\n");
+    printf("Tmin = %.4f\n", Tmin);
+    printf("Tmax = %.4f\n", Tmax);
+    printf("ΔT   = %.4f\n", deltaT);
+    printf("Gradient max = %.4f\n", grad_max);
+}
+
+===== ./nuclear/code_c/Grid.c =====
+#include <stdlib.h>
+#include <stdio.h>
+#include <math.h>
+#include "Grid.h"
+#include "TypesAssemblage.h"
+
+// Allocations
+
+int **alloc_int_grid(int n) {
+    int **m = malloc(n * sizeof(int *));
+    for(int i = 0; i < n; i++)
+        m[i] = calloc(n, sizeof(int));
+    return m;
+}
+
+char **alloc_char_grid(int n) {
+    char **m = malloc(n * sizeof(char *));
+    for(int i = 0; i < n; i++)
+        m[i] = malloc(n * sizeof(char));
+    return m;
+}
+
+void free_int_grid(int **grid, int n) {
+    for(int i = 0; i < n; i++)
+        free(grid[i]);
+    free(grid);
+}
+
+void free_char_grid(char **grid, int n) {
+    for(int i = 0; i < n; i++)
+        free(grid[i]);
+    free(grid);
+}
+
+// 1) Cercle euclidien sans correction
+
+void generer_cercle(Grid *G) {
+    int n  = G->size;
+    int cx = G->rayon;
+    int cy = G->rayon;
+
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < n; j++)
+            G->core[i][j] = 0;
+
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            int dx = i - cx;
+            int dy = j - cy;
+            if (dx*dx + dy*dy <= G->rayon * G->rayon)
+                G->core[i][j] = 1;
+        }
+    }
+}
+
+// 2) Correction des extrémités (épaissir le sommet lui-même)
+
+void corriger_extremites(Grid *G) {
+    int n  = G->size;
+    int cx = G->rayon;
+    int cy = G->rayon;
+
+    // Haut
+    int hx = cx - G->rayon;
+    int hy = cy;
+    if (hx >= 0) {
+        if (hy > 0)     G->core[hx][hy-1] = 1;
+        G->core[hx][hy] = 1;
+        if (hy < n - 1) G->core[hx][hy+1] = 1;
+    }
+
+    // Bas
+    int bx = cx + G->rayon;
+    int by = cy;
+    if (bx < n) {
+        if (by > 0)     G->core[bx][by-1] = 1;
+        G->core[bx][by] = 1;
+        if (by < n - 1) G->core[bx][by+1] = 1;
+    }
+
+    // Gauche
+    int gx = cx;
+    int gy = cy - G->rayon;
+    if (gy >= 0) {
+        if (gx > 0)     G->core[gx-1][gy] = 1;
+        G->core[gx][gy] = 1;
+        if (gx < n - 1) G->core[gx+1][gy] = 1;
+    }
+
+    // Droite
+    int dx2 = cx;
+    int dy2 = cy + G->rayon;
+    if (dy2 < n) {
+        if (dx2 > 0)     G->core[dx2-1][dy2] = 1;
+        G->core[dx2][dy2] = 1;
+        if (dx2 < n - 1) G->core[dx2+1][dy2] = 1;
+    }
+}
+
+// 3) Génération complète
+
+Grid generer_grille_circulaire(int rayon) {
+    Grid G;
+    G.rayon = rayon;
+    G.size  = 2 * rayon + 1;
+
+    int n = G.size;
+
+    G.core = alloc_int_grid(n);
+    G.g    = alloc_char_grid(n);
+
+    for(int i = 0; i < n; i++)
+        for(int j = 0; j < n; j++)
+            G.g[i][j] = '-';
+
+    generer_cercle(&G);
+    corriger_extremites(&G);
+
+    return G;
+}
+
+// Affichages
+
+void afficher_core(Grid G) {
+    for(int i = 0; i < G.size; i++) {
+        for(int j = 0; j < G.size; j++)
+            printf("%c ", G.core[i][j] ? 'A' : '-');
+        printf("\n");
+    }
+}
+
+void afficher_grille(Grid G) {
+    for (int i = 0; i < G.size; i++) {
+        for (int j = 0; j < G.size; j++) {
+            char c = G.g[i][j];
+            int idx = couleur_type(c);
+            if (idx == -1) printf("⬜");
+            else           printf("%s", palette[idx]);
+        }
+        printf("\n");
+    }
+}
+
