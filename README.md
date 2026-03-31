@@ -43,10 +43,12 @@ Solveur assemblage (C) → Assemblage.txt → Simulateur 3D (C++/Vulkan)
 
 ## 2. Documentation
 
-La documentation complète (modèles physiques, schémas numériques, architecture GPU, guide utilisateur) est disponible dans :
+La documentation complète (modèles physiques, schémas numériques, architecture GPU, guide utilisateur) est disponible pdf ou docx dans :
 
 ```
-calcul3d/documentation_Simulation_Nucleaire_Eloi_KRESS.docx
+GPU_ThermoHydraulique_Nucleaire/documentation_Simulation_Nucleaire_Eloi_KRESS.docx
+GPU_ThermoHydraulique_Nucleaire/documentation_Simulation_Nucleaire_Eloi_KRESS.pdf
+
 ```
 
 ---
