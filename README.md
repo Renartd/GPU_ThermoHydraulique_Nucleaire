@@ -1,6 +1,8 @@
 # Simulateur Neutronique‑Thermique 3D  
 **Modélisation temps réel de réacteurs nucléaires avec accélération GPU Vulkan**
 
+/!\ le programme ne fonctionne plus sur windows depuis la fusion du solveur et du simulateur. Par ailleurs windows exige la levée de nombreuses sécurité pour exécuter ce programme.
+
 Ce dépôt contient un simulateur couplé neutronique‑thermique.
 Développé par **Eloi Kress**.
 
