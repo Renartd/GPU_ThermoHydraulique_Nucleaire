@@ -55,6 +55,8 @@ echo "      (réponds aux questions pour configurer le cœur)"
 echo ""
 
 cd "$SCRIPT_DIR/assemblage_solver/nuclear/code_c"
+# Passer le chemin de sortie en variable d'environnement
+export ASSEMBLAGE_OUT="$DATA_FILE"
 ./assemblage_solver
 
 # Vérifier que Assemblage.txt a bien été écrit
